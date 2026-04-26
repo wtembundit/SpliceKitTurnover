@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+*.log
+
+# Local runtime/cache noise
+lua/scripts/node_modules/
+
+# macOS / editor noise
+*.swp
+*.swo
