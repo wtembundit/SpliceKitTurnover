@@ -15,7 +15,7 @@ struct SetupStatus {
 }
 
 final class WorkerSetupWindowController: NSWindowController {
-    private let worker: VFXShotListWorker
+    private let worker: SpliceKitWorker
     private let summaryLabel = NSTextField(labelWithString: "Install the SpliceKit menu scripts, Motion title, and permissions from one place.")
     private let footerLabel = NSTextField(labelWithString: "")
     private let luaStatusLabel = NSTextField(labelWithString: "")
@@ -26,7 +26,7 @@ final class WorkerSetupWindowController: NSWindowController {
     private let loginStatusLabel = NSTextField(labelWithString: "")
     private let startAtLoginCheckbox = NSButton(checkboxWithTitle: "Start at login", target: nil, action: nil)
 
-    init(worker: VFXShotListWorker) {
+    init(worker: SpliceKitWorker) {
         self.worker = worker
 
         let window = NSWindow(
@@ -229,7 +229,7 @@ final class WorkerSetupWindowController: NSWindowController {
 }
 
 final class WorkerAppDelegate: NSObject, NSApplicationDelegate {
-    private let worker = VFXShotListWorker()
+    private let worker = SpliceKitWorker()
     private var timer: Timer?
     private var windowController: WorkerSetupWindowController?
 
@@ -257,7 +257,7 @@ final class WorkerAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-final class VFXShotListWorker {
+final class SpliceKitWorker {
     private let fileManager = FileManager.default
     private let homeDir = FileManager.default.homeDirectoryForCurrentUser
     private lazy var desktopDir = homeDir.appendingPathComponent("Desktop", isDirectory: true)
@@ -771,10 +771,10 @@ replace or audition
 
         do {
             guard let image = NSImage(contentsOf: rawPath) else {
-                throw NSError(domain: "VFXShotListWorker", code: 10, userInfo: [NSLocalizedDescriptionKey: "Could not read raw screenshot"])
+                throw NSError(domain: "SpliceKitWorker", code: 10, userInfo: [NSLocalizedDescriptionKey: "Could not read raw screenshot"])
             }
             guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-                throw NSError(domain: "VFXShotListWorker", code: 11, userInfo: [NSLocalizedDescriptionKey: "Could not decode screenshot image"])
+                throw NSError(domain: "SpliceKitWorker", code: 11, userInfo: [NSLocalizedDescriptionKey: "Could not decode screenshot image"])
             }
             let cropImage = cropTo16x9(cgImage) ?? cgImage
             try writePNG(cropImage, to: cropPath)
@@ -1042,11 +1042,11 @@ replace or audition
 
     private func writePNG(_ image: CGImage, to url: URL) throws {
         guard let destination = CGImageDestinationCreateWithURL(url as CFURL, "public.png" as CFString, 1, nil) else {
-            throw NSError(domain: "VFXShotListWorker", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not create PNG destination"])
+            throw NSError(domain: "SpliceKitWorker", code: 1, userInfo: [NSLocalizedDescriptionKey: "Could not create PNG destination"])
         }
         CGImageDestinationAddImage(destination, image, nil)
         if !CGImageDestinationFinalize(destination) {
-            throw NSError(domain: "VFXShotListWorker", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not finalize PNG"])
+            throw NSError(domain: "SpliceKitWorker", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not finalize PNG"])
         }
     }
 
@@ -1069,13 +1069,13 @@ replace or audition
             bitsPerPixel: 0
         )
         guard let bitmapRep = rep else {
-            throw NSError(domain: "VFXShotListWorker", code: 3, userInfo: [NSLocalizedDescriptionKey: "Could not allocate thumbnail bitmap"])
+            throw NSError(domain: "SpliceKitWorker", code: 3, userInfo: [NSLocalizedDescriptionKey: "Could not allocate thumbnail bitmap"])
         }
 
         NSGraphicsContext.saveGraphicsState()
         guard let context = NSGraphicsContext(bitmapImageRep: bitmapRep) else {
             NSGraphicsContext.restoreGraphicsState()
-            throw NSError(domain: "VFXShotListWorker", code: 4, userInfo: [NSLocalizedDescriptionKey: "Could not create graphics context"])
+            throw NSError(domain: "SpliceKitWorker", code: 4, userInfo: [NSLocalizedDescriptionKey: "Could not create graphics context"])
         }
         NSGraphicsContext.current = context
         let nsImage = NSImage(cgImage: image, size: NSSize(width: sourceWidth, height: sourceHeight))
@@ -1083,7 +1083,7 @@ replace or audition
         NSGraphicsContext.restoreGraphicsState()
 
         guard let data = bitmapRep.representation(using: .jpeg, properties: [.compressionFactor: 0.9]) else {
-            throw NSError(domain: "VFXShotListWorker", code: 5, userInfo: [NSLocalizedDescriptionKey: "Could not encode JPEG thumbnail"])
+            throw NSError(domain: "SpliceKitWorker", code: 5, userInfo: [NSLocalizedDescriptionKey: "Could not encode JPEG thumbnail"])
         }
         try data.write(to: url)
     }

@@ -301,7 +301,7 @@ In practice, the safest setup is:
 Useful files in this package:
 
 - [SpliceKit Worker.app](</Users/arm/Documents/Splicekit/workers/SpliceKit Worker.app>)
-- [main.swift](/Users/arm/Documents/Splicekit/app-src/VFXShotListWorker/main.swift)
+- [main.swift](/Users/arm/Documents/Splicekit/app-src/SpliceKitWorker/main.swift)
 - [VFX Auto Marker.lua](/Users/arm/Documents/Splicekit/lua/VFX%20Auto%20Marker.lua)
 - [VFX Shot List.lua](/Users/arm/Documents/Splicekit/lua/VFX%20Shot%20List.lua)
 - [VFX Timeline.lua](/Users/arm/Documents/Splicekit/lua/VFX%20Timeline.lua)
