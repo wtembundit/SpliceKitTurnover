@@ -75,35 +75,129 @@ After that, leave **SpliceKit Worker.app** running and use the Lua scripts from 
 
 ## Main Scripts
 
-- `VFX Auto Naming.lua`
-  Renumbers `VFX NAMING` titles automatically.
+### 1. `📝 VFX Auto Naming.lua`
 
-- `VFX Reset Naming.lua`
-  Resets numbered `VFX NAMING` titles back to `XXXX`.
+Use this when you want to turn placeholder `VFX NAMING` titles into real shot numbers automatically.
 
-- `VFX Auto Marker.lua`
-  Opens one prompt and asks which marker type you want.
+What it does:
 
-- `VFX Shot List.lua`
-  Exports the VFX shot list workflow.
+- finds `VFX NAMING` titles in the current timeline
+- looks for titles that end in a placeholder like `XXXX`
+- replaces that placeholder with running shot numbers such as `0010`, `0020`, `0030`
+- writes the updated naming back into Final Cut Pro
 
-- `VFX Timeline.lua`
-  Imports VFX deliveries and places them back on the timeline.
+What you will see after it runs:
+
+- the imported updated project is prefixed with `📝`
+
+Example:
+
+- if your title is `ABC_SC99_XXXX`
+- the script will turn it into:
+  - `ABC_SC99_0010`
+  - `ABC_SC99_0020`
+  - `ABC_SC99_0030`
+
+If the scene prefix changes, the numbering starts again for that new scene.
+
+Example:
+
+- `ABC_SC99_0010`
+- `ABC_SC99_0020`
+- `ABC_SC100_0010`
+- `ABC_SC100_0020`
+
+### 2. `🔁 VFX Reset Naming.lua`
+
+Use this when you want to clear the numbering and go back to placeholders.
+
+What it does:
+
+- finds numbered `VFX NAMING` titles such as `ABC_SC99_0010`
+- resets only the shot-number part back to `XXXX`
+- helps when you want to rebuild the sequence naming from scratch
+
+What you will see after it runs:
+
+- the imported reset project is prefixed with `🔁`
+
+Example:
+
+- `ABC_SC99_0010` becomes `ABC_SC99_XXXX`
+- `ABC_SC99_0020` becomes `ABC_SC99_XXXX`
+
+### 3. `🛠 VFX Auto Marker.lua`
+
+Use this after naming is ready and you want markers generated from the `VFX NAMING` titles.
+
+What it does:
+
+- opens one prompt from the worker
+- lets you choose `standard`, `todo`, or `chapter`
+- runs the matching marker workflow automatically
+- copies the VFX number into the marker name
+- copies the shot description into the marker note
+- creates the marker positions that `VFX Shot List.lua` later uses to capture thumbnails and build the shot list
+
+In practice, this is the step that turns the title text into usable marker data for the shot-list workflow.
+
+What you will see after it runs:
+
+- the imported marker-updated project is prefixed with `🛠`
+
+### 4. `📋 VFX Shot List.lua`
+
+Use this when you want the final VFX shot list package.
+
+What it does:
+
+- reads the VFX markers from the current project
+- captures thumbnails
+- builds the Excel shot list
+
+Final result:
+
+- `VFX Shot List - <Project Name>.xlsx`
+- `Thumbnails/`
+
+What you will see after it runs:
+
+- a desktop folder named `VFX Shot List - <Project Name>/`
+- inside it: the Excel file and the thumbnail folder
+
+### 5. `📦 VFX Timeline.lua`
+
+Use this when VFX renders come back from post and you want to place them onto the timeline.
+
+What it does:
+
+- asks for the delivery folder
+- matches returned renders to the VFX shots
+- places them back as VFX connected clips
+- supports `connected`, `replace`, and `audition`
+
+What you will see after it runs:
+
+- a helper project imported with a name like `📦 VFX Deliveries v1 - <Project Name>`
+- later runs continue as `v2`, `v3`, and so on
 
 ## Recommended Order
 
-For a normal VFX prep workflow:
+Typical order in this package:
 
-1. Run `VFX Auto Naming.lua`
-2. Run `VFX Auto Marker.lua`
-3. Run `VFX Shot List.lua`
+1. `VFX Auto Naming.lua`
+2. `VFX Reset Naming.lua`
+3. `VFX Auto Marker.lua`
+4. `VFX Shot List.lua`
+5. `VFX Timeline.lua`
 
-When VFX renders come back from post:
+How that normally works in practice:
 
-1. Leave `SpliceKit Worker.app` open
-2. Run `VFX Timeline.lua`
-3. Choose the delivery folder
-4. Review the placed VFX clips in Final Cut Pro
+1. Run `VFX Auto Naming.lua` when you want to number the shots
+2. Run `VFX Reset Naming.lua` only if you want to clear the numbering and start over
+3. Run `VFX Auto Marker.lua` when the naming is ready
+4. Run `VFX Shot List.lua` when you want thumbnails and Excel
+5. Run `VFX Timeline.lua` later, when VFX renders come back from post
 
 ## Package Structure
 
