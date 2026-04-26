@@ -18,48 +18,6 @@ You need:
 - Final Cut Pro
 - this package folder kept together on disk
 
-## What This Package Does
-
-### VFX Shot List
-
-Creates:
-
-- `VFX Shot List - <Project Name>.xlsx`
-- a `Thumbnails/` folder
-
-The Excel sheet includes:
-
-- Thumbnail
-- VFX Number
-- Note
-- Timeline TC In
-- Duration (Frames)
-- Source Filename
-- Source TC In
-- Source TC Out
-- Metadata
-- Remark
-
-### VFX Timeline
-
-Takes VFX renders from a delivery folder and places them back onto the current timeline as VFX connected clips.
-
-Supports:
-
-- connected
-- replace
-- audition
-
-If there is no earlier VFX version for a shot, `replace` and `audition` fall back to `connected`.
-
-### VFX Auto Marker
-
-Lets you choose one marker type from the worker:
-
-- standard
-- todo
-- chapter
-
 ## Quick Setup
 
 1. Install [SpliceKit](https://github.com/elliotttate/SpliceKit).
@@ -73,7 +31,7 @@ Lets you choose one marker type from the worker:
 
 After that, leave **SpliceKit Worker.app** running and use the Lua scripts from SpliceKit.
 
-## Main Scripts
+## Main Workflows And Scripts
 
 ### 1. `📝 VFX Auto Naming.lua`
 
@@ -155,6 +113,19 @@ What it does:
 - captures thumbnails
 - builds the Excel shot list
 
+The Excel sheet includes:
+
+- Thumbnail
+- VFX Number
+- Note
+- Timeline TC In
+- Duration (Frames)
+- Source Filename
+- Source TC In
+- Source TC Out
+- Metadata
+- Remark
+
 Final result:
 
 - `VFX Shot List - <Project Name>.xlsx`
@@ -175,6 +146,8 @@ What it does:
 - matches returned renders to the VFX shots
 - places them back as VFX connected clips
 - supports `connected`, `replace`, and `audition`
+
+If there is no earlier VFX version for a shot, `replace` and `audition` fall back to `connected`.
 
 What you will see after it runs:
 
