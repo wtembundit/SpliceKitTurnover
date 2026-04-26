@@ -269,6 +269,9 @@ This removes:
 - copied SpliceKit menu scripts
 - worker state files
 - the login item
+
+It does **not** remove:
+
 - the installed `VFX Naming` Motion title
 
 It does **not** delete the source package folder itself.
