@@ -7,21 +7,8 @@
 --   3) Enters View > Playback > Play Full Screen
 --   4) Immediately pauses/toggles playback
 --   5) Seeks through markers in order
---   6) Writes a manifest TSV for downstream screenshot/Excel processing
---
--- Optional:
---   - Can still call viewer.capture as a fallback/reference capture, but this is OFF by default
---     because it is viewer-cropped, not full-screen.
---
--- Why this version stops here:
---   - SpliceKit on this build does not expose a working full-screen screen-capture RPC.
---   - Save Current Frame automation reaches NSSavePanel, but last-mile automation is not yet reliable.
---
--- Recommended next architecture:
---   - Keep this script as the FCP controller
---   - Use a separate macOS screenshot worker to capture the full screen while this script
---     advances through markers
---   - Then build Excel from the manifest + screenshots
+--   6) Captures the viewer for each marker through SpliceKit's GPU/window capture RPC
+--   7) Writes a manifest TSV for Excel generation
 
 local CONFIG = {
     MARKER_PREFIX_PATTERN = "^[%u%d_]+_%d%d%d%d$",
@@ -34,8 +21,7 @@ local CONFIG = {
     FAST_DWELL_AFTER_SEEK_SEC = 0.04,
     FAST_DWELL_BETWEEN_MARKERS_SEC = 0.02,
 
-    -- Set true only for debugging/reference; output is viewer-cropped, not full-screen.
-    ENABLE_VIEWER_CAPTURE_FALLBACK = false,
+    ENABLE_VIEWER_CAPTURE = true,
 
     -- Best-effort fullscreen playback routing.
     ENTER_PLAY_FULL_SCREEN_MENU = {"View", "Playback", "Play Full Screen"},
@@ -165,6 +151,12 @@ local function write_file(path, content)
     f:close()
 end
 
+local function mkdir_p(path)
+    -- SpliceKit disables os.execute for safety. The native Turnover plugin
+    -- creates these capture folders before this Lua controller runs.
+    return path
+end
+
 local function append_file(path, content)
     local f, err = io.open(path, "ab")
     if not f then error("Cannot append file: " .. tostring(err)) end
@@ -187,7 +179,8 @@ local function ensure_worker_ready(lines)
         log(lines, "Capture worker already ready: " .. ready_path)
         return true
     end
-    error("Capture worker is not running. Open 'SpliceKit Worker.app' first.")
+    log(lines, "No external capture worker flag found; using Turnover fullscreen capture.")
+    return true
 end
 
 
@@ -1527,10 +1520,14 @@ local function main()
     local progress_path = runtime .. "/VFX_Shot_List_Progress.tsv"
     local done_path = runtime .. "/VFX_Shot_List_Done.flag"
     local report_path = runtime .. "/VFX_Shot_List_Report.txt"
+    local capture_dir = desktop .. "/VFX_Shot_List_Captures_16x9"
+    local thumb_dir = desktop .. "/VFX_Shot_List_Captures_Thumb"
     os.remove(progress_path)
     os.remove(done_path)
     os.remove(manifest_path)
     os.remove(report_path)
+    mkdir_p(capture_dir)
+    mkdir_p(thumb_dir)
 
     ensure_worker_ready(lines)
 
@@ -1620,16 +1617,27 @@ local function main()
             row.thumb_name
         }, "\t") .. "\n")
 
-        if CONFIG.ENABLE_VIEWER_CAPTURE_FALLBACK then
-            local fallback_path = base .. "_" .. row.full_capture_name:gsub("%.png$", "_viewer.png")
-            local ok_cap, cap_res = rpc_ok("viewer.capture", { path = fallback_path })
-            log(lines, "viewer.capture fallback ok=" .. tostring(ok_cap) .. " path=" .. fallback_path)
+        if CONFIG.ENABLE_VIEWER_CAPTURE then
+            local capture_path = capture_dir .. "/" .. row.full_capture_name
+            local ok_cap, cap_res = rpc_ok("com.turnover.tools.capture_fullscreen_viewer", { path = capture_path })
+            log(lines, "turnover.capture_fullscreen_viewer ok=" .. tostring(ok_cap) .. " path=" .. capture_path)
+            if (not ok_cap) or (type(cap_res) == "table" and cap_res.error) or (type(cap_res) == "table" and cap_res.status == "error") then
+                log(lines, "turnover.capture_fullscreen_viewer fallback to viewer.capture")
+                ok_cap, cap_res = rpc_ok("viewer.capture", { path = capture_path })
+                log(lines, "viewer.capture ok=" .. tostring(ok_cap) .. " path=" .. capture_path)
+            end
             if type(cap_res) == "table" and cap_res.bytes then
-                log(lines, "viewer.capture bytes=" .. tostring(cap_res.bytes))
+                log(lines, "capture bytes=" .. tostring(cap_res.bytes))
+            end
+            if type(cap_res) == "table" and cap_res.window_title then
+                log(lines, "capture window=" .. tostring(cap_res.window_title))
+            elseif type(cap_res) == "table" and cap_res.error then
+                log(lines, "capture error=" .. tostring(cap_res.error))
+            elseif not ok_cap then
+                log(lines, "capture failed=" .. tostring(cap_res))
             end
         end
 
-        -- Dwell so an external screenshot worker can capture the frame.
         sk.sleep(CONFIG.DWELL_BETWEEN_MARKERS_SEC or 0.35)
     end
 
@@ -1639,7 +1647,7 @@ local function main()
     append_file(progress_path, table.concat({"done", tostring(#rows), "", "", "", ""}, "\t") .. "\n")
     write_file(done_path, "done\n")
     log(lines, "DONE")
-    log(lines, "Next step: pair this controller with a macOS fullscreen screenshot worker.")
+    log(lines, "Capture folder: " .. capture_dir)
     log(lines, "Suggested capture order file: " .. manifest_path)
     log(lines, "Done marker file: " .. done_path)
 

@@ -1,0 +1,68 @@
+{
+  "id": "com.turnover.tools",
+  "name": "Turnover",
+  "version": "0.1.12",
+  "description": "VFX and turnover workflow tools for Final Cut Pro.",
+  "author": "Turnover",
+  "apiVersion": 1,
+  "entry": {
+    "native": "TurnoverToolsPlugin.dylib"
+  },
+  "methods": [
+    {
+      "name": "show",
+      "description": "Open the Turnover panel",
+      "params": {},
+      "readOnly": false
+    },
+    {
+      "name": "status",
+      "description": "Return plugin runtime and permission status",
+      "params": {},
+      "readOnly": true
+    },
+    {
+      "name": "request_screen_recording",
+      "description": "Request Screen Recording permission for the current FCP process",
+      "params": {},
+      "readOnly": false
+    },
+    {
+      "name": "conform_prep",
+      "description": "Run Conform Prep",
+      "params": {},
+      "readOnly": false
+    },
+    {
+      "name": "vfx_timeline",
+      "description": "Run VFX Timeline",
+      "params": {},
+      "readOnly": false
+    },
+    {
+      "name": "vfx_auto_marker",
+      "description": "Run VFX Auto Marker by marker kind",
+      "params": {
+        "marker_kind": { "type": "string", "required": true, "description": "standard, todo, or chapter" }
+      },
+      "readOnly": false
+    },
+    {
+      "name": "capture_fullscreen_viewer",
+      "description": "Capture the largest visible Final Cut Pro window for fullscreen playback preview",
+      "params": {
+        "path": { "type": "string", "required": true, "description": "Output PNG path" }
+      },
+      "readOnly": false
+    },
+    {
+      "name": "run_tool",
+      "description": "Run a Turnover tool by id",
+      "params": {
+        "tool_id": { "type": "string", "required": true, "description": "Tool id to run" }
+      },
+      "readOnly": false
+    }
+  ],
+  "dependencies": []
+}

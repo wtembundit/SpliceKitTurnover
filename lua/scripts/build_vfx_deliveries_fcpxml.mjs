@@ -569,7 +569,7 @@ async function main() {
   const sequence = parseSequenceFormat(xml);
   const sequenceFormat = formats.get(sequence.formatId) ?? { frameDuration: 1 / 24 };
   const frameDuration = sequenceFormat.frameDuration ?? (1 / 24);
-  const totalHandleFrames = Number(config.total_handle_frames || 0) || 0;
+  const handleFrames = Number(config.handle_frames || config.total_handle_frames || 0) || 0;
   const slateFrames = Number(config.slate_frames || 0) || 0;
   const placementMode = trim(config.placement_mode || "connected") || "connected";
   const lane = Number(config.lane || 10) || 10;
@@ -617,8 +617,8 @@ async function main() {
     }
 
     const assetBaselineStart = frameDuration;
-    const headHandleFrames = Math.floor(totalHandleFrames / 2);
-    const tailHandleFrames = Math.ceil(totalHandleFrames / 2);
+    const headHandleFrames = Math.max(0, Math.floor(handleFrames));
+    const tailHandleFrames = headHandleFrames;
     const trimStartSeconds = (slateFrames + headHandleFrames) * frameDuration;
     const trimEndSeconds = tailHandleFrames * frameDuration;
     const usableDuration = sourceDuration - trimStartSeconds - trimEndSeconds;

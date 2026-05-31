@@ -264,9 +264,19 @@ async function main() {
       const thumbPath = path.isAbsolute(thumbName)
         ? thumbName
         : path.join(args.thumbs, thumbName);
+      const captureName = thumbName
+        ? `${path.basename(thumbName, path.extname(thumbName))}.png`
+        : "";
+      const capturePath = captureName
+        ? path.join(args.captures, captureName)
+        : "";
 
-      if (thumbName && (await pathExists(thumbPath))) {
-        const dataUrl = await toDataUrl(thumbPath);
+      const imagePath = thumbName && (await pathExists(thumbPath))
+        ? thumbPath
+        : (capturePath && (await pathExists(capturePath)) ? capturePath : "");
+
+      if (imagePath) {
+        const dataUrl = await toDataUrl(imagePath);
         sheet.images.add({
           dataUrl,
           anchor: {

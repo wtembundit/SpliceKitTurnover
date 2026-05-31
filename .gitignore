@@ -1,9 +1,11 @@
 .DS_Store
 .build/
 *.log
+*.dylib
 
 # Local runtime/cache noise
 lua/scripts/node_modules/
+plugins/**/data/
 
 # macOS / editor noise
 *.swp
