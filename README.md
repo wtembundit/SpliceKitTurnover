@@ -10,6 +10,12 @@ Turnover is usable for the current tested workflows, but it is still a work in p
 
 If a timeline fails or imports with missing/shifted elements, keep the original project/XML and report the smallest reproducible case so the generic rules can be improved.
 
+## Documentation
+
+- [Turnover Tools Guide](docs/turnover-tools.md): detailed workflow descriptions and usage notes.
+- [Conform Prep Guide](docs/conform-prep.md): detailed explanation of sync-clip flattening, retime math, speed ramps, titles, markers, transforms, metadata, and known limits.
+- [Release Notes v1.1.0](docs/release-notes-v1.1.0.md): plugin migration notes and current limitations.
+
 ## Tools
 
 - `Conform Prep`: flatten and prepare timelines for VFX conform.
@@ -25,7 +31,7 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 - Final Cut Pro running with SpliceKit plugin support.
 - macOS 13 or later.
 - Xcode Command Line Tools, for `clang`.
-- Node.js available from `/opt/homebrew/bin/node`, `/usr/local/bin/node`, or the environment used by Final Cut Pro.
+- Node.js. The installer detects common Homebrew, nvm, Volta, asdf, MacPorts, and shell paths automatically. If Node.js is missing and Homebrew is available, the installer can install it for you.
 - Screen Recording permission for the patched Final Cut Pro process if you use `VFX Shot List` thumbnails.
 
 ## Install
@@ -73,6 +79,12 @@ Example: entering `8` adds 8 frames at the head and 8 frames at the tail.
 - `docs/`: implementation notes and conform-prep model documentation.
 
 Build output such as `TurnoverToolsPlugin.dylib` is ignored by Git and should be regenerated locally with the install command.
+
+If Node.js is installed in a custom location, run the installer with:
+
+```zsh
+TURNOVER_NODE_PATH=/path/to/node ./plugins/com.turnover.tools/Build\ And\ Install\ Turnover\ Tools\ Plugin.command
+```
 
 ## Notes
 

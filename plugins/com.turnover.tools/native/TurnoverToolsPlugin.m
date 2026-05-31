@@ -69,18 +69,85 @@ static BOOL TTFileExists(NSString *path) {
     return [[NSFileManager defaultManager] fileExistsAtPath:path];
 }
 
+static NSString *TTTrimString(NSString *value) {
+    return [value ?: @"" stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+}
+
+static NSString *TTExecutablePath(NSString *path) {
+    NSString *trimmed = TTTrimString(path);
+    if (trimmed.length == 0) return @"";
+    return [[NSFileManager defaultManager] isExecutableFileAtPath:trimmed] ? trimmed : @"";
+}
+
+static NSArray<NSString *> *TTNVMNodeCandidates(void) {
+    NSString *versionsPath = [NSHomeDirectory() stringByAppendingPathComponent:@".nvm/versions/node"];
+    NSArray<NSString *> *versions = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:versionsPath error:nil] ?: @[];
+    NSArray<NSString *> *sorted = [versions sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
+    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+    for (NSString *version in [sorted reverseObjectEnumerator]) {
+        [candidates addObject:[[[versionsPath stringByAppendingPathComponent:version] stringByAppendingPathComponent:@"bin"] stringByAppendingPathComponent:@"node"]];
+    }
+    return candidates;
+}
+
+static NSString *TTShellWhich(NSString *tool) {
+    NSString *script = [NSString stringWithFormat:
+        @"source /etc/zprofile >/dev/null 2>&1 || true; "
+         "source ~/.zprofile >/dev/null 2>&1 || true; "
+         "source ~/.zshrc >/dev/null 2>&1 || true; "
+         "command -v %@ 2>/dev/null",
+        tool ?: @""];
+
+    NSTask *task = [[NSTask alloc] init];
+    task.executableURL = [NSURL fileURLWithPath:@"/bin/zsh"];
+    task.arguments = @[@"-lc", script];
+    NSPipe *pipe = [NSPipe pipe];
+    task.standardOutput = pipe;
+    task.standardError = [NSPipe pipe];
+
+    @try {
+        [task launch];
+        [task waitUntilExit];
+    } @catch (__unused NSException *exception) {
+        return @"";
+    }
+
+    if (task.terminationStatus != 0) return @"";
+    NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+    NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+    return TTExecutablePath(output);
+}
+
 static NSString *TTWhich(NSString *tool) {
-    NSArray<NSString *> *commonPaths = @[
+    NSMutableArray<NSString *> *commonPaths = [NSMutableArray array];
+    if ([tool isEqualToString:@"node"]) {
+        NSString *configured = TTExecutablePath([NSString stringWithContentsOfFile:[TTPluginDataPath() stringByAppendingPathComponent:@"node_path.txt"]
+                                                                          encoding:NSUTF8StringEncoding
+                                                                             error:nil]);
+        if (configured.length > 0) return configured;
+        configured = TTExecutablePath(NSProcessInfo.processInfo.environment[@"TURNOVER_NODE_PATH"]);
+        if (configured.length > 0) return configured;
+        [commonPaths addObject:[NSHomeDirectory() stringByAppendingPathComponent:@".volta/bin/node"]];
+        [commonPaths addObject:[NSHomeDirectory() stringByAppendingPathComponent:@".asdf/shims/node"]];
+        [commonPaths addObjectsFromArray:TTNVMNodeCandidates()];
+    }
+
+    [commonPaths addObjectsFromArray:@[
         [@"/opt/homebrew/bin" stringByAppendingPathComponent:tool],
         [@"/usr/local/bin" stringByAppendingPathComponent:tool],
+        [@"/opt/local/bin" stringByAppendingPathComponent:tool],
+        [@"/usr/local/opt/node/bin" stringByAppendingPathComponent:tool],
         [@"/usr/bin" stringByAppendingPathComponent:tool],
         [@"/bin" stringByAppendingPathComponent:tool],
-    ];
+    ]];
     for (NSString *path in commonPaths) {
         if ([[NSFileManager defaultManager] isExecutableFileAtPath:path]) {
             return path;
         }
     }
+
+    NSString *shellPath = TTShellWhich(tool);
+    if (shellPath.length > 0) return shellPath;
 
     NSTask *task = [[NSTask alloc] init];
     task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/which"];
@@ -99,7 +166,7 @@ static NSString *TTWhich(NSString *tool) {
     if (task.terminationStatus != 0) return @"";
     NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
     NSString *output = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-    return [output stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    return TTExecutablePath(output);
 }
 
 static NSString *TTReadFile(NSString *path, NSError **error) {
@@ -454,7 +521,7 @@ static NSDictionary *TTStatus(void) {
 
     return @{
         @"plugin": @"Turnover",
-        @"version": @"0.1.12",
+        @"version": @"1.1.0",
         @"data_path": TTString(dataPath),
         @"screen_recording_granted": @(CGPreflightScreenCaptureAccess()),
         @"accessibility_granted": @(AXIsProcessTrusted()),
