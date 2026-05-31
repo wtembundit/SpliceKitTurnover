@@ -4,6 +4,12 @@ Native SpliceKit plugin for Final Cut Pro turnover workflows.
 
 Turnover bundles the VFX tools that used to run through the separate SpliceKit Worker app into one native plugin menu. The Worker app is no longer required.
 
+## Current Status
+
+Turnover is usable for the current tested workflows, but it is still a work in progress. Some FCPXML edge cases are known to need more refinement, especially complex retime/speed-ramp combinations, nested sync clips, titles connected across multiple clips, markers, transforms, and metadata preservation in unusual timelines.
+
+If a timeline fails or imports with missing/shifted elements, keep the original project/XML and report the smallest reproducible case so the generic rules can be improved.
+
 ## Tools
 
 - `Conform Prep`: flatten and prepare timelines for VFX conform.
@@ -71,4 +77,4 @@ Build output such as `TurnoverToolsPlugin.dylib` is ignored by Git and should be
 ## Notes
 
 - The old SpliceKit Worker app, setup tools, and worker source have been removed.
-- The GitHub repository can be renamed from `SpliceKitWorker` to `SplicekitTurnover` or `SpliceKitTurnover` after this migration. GitHub will normally redirect the old remote, but updating the local `origin` URL after the rename is recommended.
+- The GitHub repository has been renamed from `SpliceKitWorker` to `SpliceKitTurnover`.
