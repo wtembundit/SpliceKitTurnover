@@ -1,29 +1,29 @@
 # Conform Prep Guide
 
-`Conform Prep` เป็นเครื่องมือสำหรับแปลง timeline ที่มี `sync-clip` ให้กลายเป็น timeline ที่อ้างอิง original source clip มากขึ้น เพื่อให้ VFX/online conform อ่าน source file, source timecode และ retime ได้ใกล้กับสิ่งที่เห็นใน Final Cut Pro
+`Conform Prep` converts timelines that contain `sync-clip` items into timelines that reference the original source clips more directly. The goal is to make VFX and online conform easier by preserving source filenames, visible source timecode, retime behavior, titles, markers, transforms, and metadata as closely as possible.
 
-## 🎯 เป้าหมาย
+## 🎯 Goals
 
-- ลด `sync-clip` ที่ซ้อนอยู่ใน timeline ให้กลายเป็น source-backed clip
-- Preserve visible frame แรกและเฟรมสุดท้ายให้ตรงกับ timeline ต้นฉบับ
-- Preserve speed segment, speed ramp/transition, reverse และ blade speed ให้มากที่สุด
-- Preserve title, marker, transform, role และ metadata ที่ติดกับคลิป
-- ทำให้ FCP import XML กลับมาได้โดยไม่เกิดคลิปหายหรือ warning เท่าที่เป็นไปได้
+- Reduce nested `sync-clip` items into source-backed clips where possible.
+- Preserve the first and last visible source frames from the original timeline.
+- Preserve speed segments, speed ramps/transitions, reverse segments, and blade speed as much as possible.
+- Preserve titles, markers, transforms, roles, and metadata attached to the affected clips.
+- Generate FCPXML that Final Cut Pro can import without missing clips or avoidable edit-boundary warnings.
 
-## 🧠 หลักคิดของการคำนวณ speed
+## 🧠 Speed Calculation Model
 
-เวลาที่ editor ทำงาน manual มักเป็นสองชั้น:
+When this is done manually, the workflow is usually two-layered:
 
-1. Break apart หรือ flatten sync clip เพื่อให้เห็น original source clip ด้านใน
-2. คูณ speed ของชั้นนอกเข้ากับ speed ของ original clip ด้านใน แล้วปรับ blade/speed segment ให้ visible source timecode ตรงกับ timeline ต้นฉบับ
+1. Break apart or flatten the sync clip so the original source clip inside becomes visible.
+2. Multiply the outer sync-clip speed by the inner original-clip speed, then place the speed segments so the visible source timecode matches the original timeline.
 
-Conform Prep ใช้แนวคิดเดียวกัน:
+Conform Prep follows the same principle:
 
 ```text
-effective speed = inner source speed × outer sync clip speed
+effective speed = inner source speed x outer sync clip speed
 ```
 
-ตัวอย่าง:
+Example:
 
 ```text
 inner clip = 200%
@@ -31,7 +31,7 @@ sync clip = 130%
 flattened source clip = 260%
 ```
 
-ถ้าเป็น reverse:
+Reverse example:
 
 ```text
 inner clip = 200%
@@ -39,77 +39,79 @@ sync clip = -115%
 flattened source clip = -230%
 ```
 
-## ⚡ Speed Segment และ Speed Ramp
+## ⚡ Speed Segments And Speed Ramps
 
-Final Cut Pro ไม่ได้เก็บ retime เป็นแค่ค่า speed เดียวเสมอไป บางคลิปมี:
+Final Cut Pro does not always store retime as one constant speed value. A clip may contain:
 
 - constant speed
-- blade speed หลายช่วง
-- speed transition/ramp ที่ค่อยๆ เปลี่ยนความเร็ว
-- reverse segment
-- timeMap ที่ใช้ interpolation เช่น `smooth2`
+- several blade-speed segments
+- speed transitions/ramps that gradually change speed
+- reverse segments
+- `timeMap` interpolation such as `smooth2`
 
-Conform Prep จึงพยายามอ่าน timeMap ทั้งชั้นนอกและชั้นใน แล้วสร้าง flattened timeMap ใหม่ที่รักษา:
+Conform Prep reads the outer and inner `timeMap` structures and attempts to build a flattened `timeMap` that preserves:
 
 - visible source TC in/out
-- จุดเปลี่ยน speed สำคัญ
-- ค่าความเร็วที่เป็นผลคูณจริง
-- จำนวน segment ที่ใกล้กับต้นฉบับ ไม่สร้าง blade ชดเชยเกินจำเป็น
+- important speed-change points
+- the real multiplied speed values
+- a segment count close to the original, without inventing extra compensation blades when avoidable
 
-## 🧩 Checkpoint คืออะไร
+## 🧩 What We Mean By Checkpoints
 
-ระหว่างพัฒนาเราใช้ checkpoint จาก source timecode window ใน Final Cut Pro เพื่อตรวจว่าจุดต่างๆ ตรงหรือไม่ แต่ใน workflow จริง user ไม่ต้องป้อน checkpoint เอง
+During development, checkpoints were inspected through Final Cut Pro's source timecode display to confirm whether key frames matched. In normal use, the user does not manually enter checkpoints.
 
-Script จะ derive จุดอ้างอิงจาก FCPXML:
+The script derives reference points from the FCPXML:
 
-- timeMap ของ sync clip ชั้นนอก
-- timeMap ของ original clip ด้านใน
-- source start ของ asset
-- offset/start/duration ของ clip
-- visible source time ที่คำนวณหลัง flatten
+- the outer sync-clip `timeMap`
+- the inner original clip `timeMap`
+- the source asset start
+- the clip offset/start/duration
+- the visible source time calculated after flattening
 
-สิ่งสำคัญคือ checkpoint ต้องอิง original source clip ด้านใน ไม่ใช่ sync clip timecode เพราะ sync clip timecode อาจถูกสร้างมาไม่ตรงกับ source จริง
+The important rule is that checkpoints must refer to the original source clip inside the sync clip, not the sync clip's own timecode. Sync-clip timecode can be unrelated to the real source timecode.
 
-## 🏷 Title, Marker, Transform และ Metadata
+## 🏷 Titles, Markers, Transforms, And Metadata
 
-Conform Prep พยายามย้าย connected element ที่เกี่ยวข้องตาม timeline position จริง ไม่ใช่ยึดแค่ parent clip เดิมเสมอไป เพราะใน FCP title อาจ:
+Conform Prep tries to move connected elements by their real timeline position instead of relying only on the original parent clip. This matters because Final Cut Pro titles can:
 
-- เริ่มก่อนคลิปไม่กี่เฟรมแต่พาดยาวข้ามคลิปถัดไป
-- ยาวกว่าคลิปที่มัน connected อยู่
-- สั้นกว่าคลิปหลัก
-- ซ้อนกับ title อื่นจนดูเหมือนหาย
+- start a few frames before one clip but mostly cover the next clip
+- be longer than the clip they are connected to
+- be shorter than the main clip
+- overlap with other titles so they appear hidden
 
-กฎปัจจุบันพยายาม preserve โดยดู timeline range และ connection point ร่วมกัน แต่ยังเป็นจุดที่ต้องเก็บเคสเพิ่มต่อ
+The current rule set uses both timeline range and connection point. This area is improving, but unusual title and marker structures should still be checked after import.
 
-## ✅ เคสที่รองรับดีขึ้นแล้ว
+## ✅ Cases That Work Better Now
 
-- Simple sync clip flatten
-- Sync clip ที่ speed ชั้นนอกอย่างเดียว
-- Original clip ด้านในมี speed แล้ว sync clip ด้านนอกมี speed ซ้อน
-- Constant retime ที่ต้องจับ TC in/out ให้ตรง
-- Blade speed หลายช่วงในตัวอย่างทดสอบ
-- Reverse retime ในตัวอย่างทดสอบ
-- Title/marker/transform/metadata หลายรูปแบบใน timeline จริง
+- Simple sync-clip flattening
+- Sync clips with only outer speed
+- Inner original clips with speed plus additional outer sync-clip speed
+- Constant retime where TC in/out must match exactly
+- Multi-segment blade-speed examples from test timelines
+- Reverse retime examples from test timelines
+- Many real-world title, marker, transform, and metadata preservation cases
 
 ## ⚠️ Known Limitations
 
-ยังมีเคสที่ต้องตรวจหลัง import:
+Check the imported timeline carefully when working with:
 
-- Multicam ยังไม่ใช่เป้าหมายหลัก เพราะมีเครื่องมือเฉพาะอย่าง Multicam Flattener ที่เหมาะกว่า
-- Retime pattern ที่ซับซ้อนมากและไม่เคยเจออาจ drift 1-2 frames หรือมากกว่า
-- Speed ramp บางแบบใน FCPXML อาจแสดงผลไม่ตรง 100% กับ UI ของ FCP เพราะ FCP มีการปัดเศษค่า speed
-- Title ที่พาดข้ามหลาย clip หรือมี connection point แปลกยังอาจหาย/ซ้อน/ยาวไม่เท่าต้นฉบับในบางกรณี
-- Marker ที่เกิดจาก structure เดิมบางแบบอาจต้องลบหรือ normalize เพิ่ม
+- Multicam clips. Multicam is not the main target because dedicated tools such as Multicam Flattener handle that class of problem better.
+- Very complex retime patterns that have not been tested yet.
+- Speed ramps that Final Cut Pro rounds differently in the UI than in FCPXML.
+- Titles spanning across multiple clips or using unusual connection points.
+- Markers created by older or unusual timeline structures.
 
-## 🧪 วิธี report เคสที่พลาด
+Some cases may still drift by 1-2 frames or require a new generic rule.
 
-ถ้าเจอเคสที่ import แล้วไม่ตรง ให้เก็บ:
+## 🧪 How To Report A Failing Case
 
-- original `.fcpxmld` หรือ `.fcpxml`
-- output `.fcpxmld` หลัง run
-- screenshot before/after
-- ชื่อ clip ที่ผิด
-- expected source TC in/out ถ้ามี
-- ระบุว่า speed เป็น constant, blade speed, ramp หรือ reverse
+If a timeline imports incorrectly, keep:
 
-ข้อมูลพวกนี้ช่วยให้เราทำกฎ generic ต่อได้โดยไม่ hardcode เฉพาะ shot
+- the original `.fcpxmld` or `.fcpxml`
+- the generated output `.fcpxmld` or `.fcpxml`
+- before/after screenshots
+- the affected clip name
+- expected source TC in/out, if known
+- whether the speed is constant, blade speed, ramp, reverse, or nested retime
+
+These details help improve the generic rules without hardcoding one specific shot.

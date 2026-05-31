@@ -34,6 +34,32 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 - Node.js. The installer detects common Homebrew, nvm, Volta, asdf, MacPorts, and shell paths automatically. If Node.js is missing and Homebrew is available, the installer can install it for you.
 - Screen Recording permission for the patched Final Cut Pro process if you use `VFX Shot List` thumbnails.
 
+## Install Node.js
+
+Turnover uses Node.js for the FCPXML planners and Excel generation helpers.
+
+Recommended install with Homebrew:
+
+```zsh
+brew install node
+```
+
+If Homebrew is not installed, install it first from [brew.sh](https://brew.sh), then run the command above.
+
+Alternative install from the official Node.js package:
+
+1. Download the macOS installer from [nodejs.org](https://nodejs.org).
+2. Install the current LTS version.
+3. Restart Final Cut Pro after installing Node.js.
+
+The Turnover installer searches common Node.js locations automatically, including Homebrew, nvm, Volta, asdf, MacPorts, and shell startup paths.
+
+If Node.js is installed in a custom location, run the installer with:
+
+```zsh
+TURNOVER_NODE_PATH=/path/to/node ./plugins/com.turnover.tools/Build\ And\ Install\ Turnover\ Tools\ Plugin.command
+```
+
 ## Install
 
 From this repository root:
@@ -79,12 +105,6 @@ Example: entering `8` adds 8 frames at the head and 8 frames at the tail.
 - `docs/`: implementation notes and conform-prep model documentation.
 
 Build output such as `TurnoverToolsPlugin.dylib` is ignored by Git and should be regenerated locally with the install command.
-
-If Node.js is installed in a custom location, run the installer with:
-
-```zsh
-TURNOVER_NODE_PATH=/path/to/node ./plugins/com.turnover.tools/Build\ And\ Install\ Turnover\ Tools\ Plugin.command
-```
 
 ## Notes
 

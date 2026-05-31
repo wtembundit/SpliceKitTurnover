@@ -1,52 +1,52 @@
 # Turnover Tools Guide
 
-คู่มือเครื่องมือหลักใน Turnover สำหรับงาน VFX turnover บน Final Cut Pro ผ่าน SpliceKit plugin
+This guide explains the main Turnover workflows for Final Cut Pro VFX turnover through the native SpliceKit plugin.
 
-> สถานะปัจจุบัน: เครื่องมือชุดนี้ใช้งานได้กับ workflow ที่ทดสอบแล้ว แต่ยังมี edge cases จาก FCPXML บางรูปแบบที่ต้องไล่แก้ต่อ โดยเฉพาะ retime/speed ramp ซับซ้อน, nested sync clip, title ที่พาดข้ามหลายคลิป, marker, transform และ metadata ใน timeline ที่มีโครงสร้างแปลก
+> Current status: Turnover is usable for the workflows we have tested, but it is still a work in progress. Some FCPXML edge cases still need refinement, especially complex retime/speed-ramp combinations, nested sync clips, titles connected across multiple clips, markers, transforms, and metadata in unusual timelines.
 
 ## 🎞 Conform Prep
 
-เตรียม timeline สำหรับ conform โดยพยายาม flatten `sync-clip` ให้กลายเป็น original source clip ที่อ่านง่ายขึ้นใน timeline ปลายทาง
+Prepares a timeline for VFX conform by flattening `sync-clip` items into easier-to-read original source clips where possible.
 
-อ่านรายละเอียดเชิงลึกได้ที่ [Conform Prep Guide](./conform-prep.md)
+For the deeper technical guide, see [Conform Prep Guide](./conform-prep.md).
 
-เหมาะกับ:
+Best for:
 
-- Timeline ที่มี `sync-clip` จำนวนมากและต้องการถอดกลับมาเป็น source-backed clip
-- งาน VFX turnover ที่ต้องการให้ source filename, visible source timecode, title, marker, transform และ metadata ตามกลับมาให้มากที่สุด
-- เคสที่ editor ใช้ retime บน sync clip และ/หรือ original clip ด้านใน
+- Timelines with many `sync-clip` items that need to become source-backed clips.
+- VFX turnovers where source filename, visible source timecode, titles, markers, transforms, and metadata should survive as much as possible.
+- Cases where an editor applied retime to the sync clip, the original inner clip, or both.
 
-สิ่งที่ทำ:
+What it does:
 
-- Flatten simple sync clips เป็น `clip` หรือ `asset-clip` ที่อ้างอิง source เดิม
-- รวม speed ชั้นนอกกับ speed ของ original clip ด้านในเมื่อทำได้
-- พยายาม preserve speed segment, speed transition/ramp, reverse, blade speed, title, marker, transform และ metadata
-- Normalize offset/duration ให้ FCP import ได้และลด warning เรื่อง edit frame boundary
-- สร้าง report เพื่อดูว่า flatten อะไรสำเร็จหรือ skip อะไรไว้
+- Flattens simple sync clips into `clip` or `asset-clip` elements that reference the original source.
+- Combines outer sync-clip speed with inner original-clip speed when the structure is supported.
+- Attempts to preserve speed segments, speed transitions/ramps, reverse segments, blade speed, titles, markers, transforms, and metadata.
+- Normalizes offsets and durations so Final Cut Pro can import the generated FCPXML with fewer edit-boundary warnings.
+- Writes a report showing which clips were flattened and which clips were skipped.
 
-ข้อควรระวัง:
+Important notes:
 
-- ยังไม่รับประกันทุก FCPXML shape โดยเฉพาะ multicam และ retime pattern ที่ไม่เคยเจอ
-- ถ้า import แล้วคลิปหายหรือ title/marker drift ให้เก็บ original XML และ output XML ไว้เป็นเคสทดสอบ
+- Not every FCPXML shape is guaranteed yet, especially multicam and retime patterns we have not tested.
+- If a clip disappears or titles/markers drift after import, keep both the original XML and generated XML as a reproducible test case.
 
 ## 📝 VFX Auto Naming
 
-เติมเลข shot ให้ title ประเภท `VFX NAMING` อัตโนมัติ
+Automatically numbers `VFX NAMING` titles.
 
-เหมาะกับ:
+Best for:
 
-- Timeline ที่มี placeholder เช่น `ABC_SC99_XXXX`
-- ต้องการเลข shot ต่อเนื่อง เช่น `0010`, `0020`, `0030`
-- ต้องการเริ่มเลขใหม่เมื่อ scene prefix เปลี่ยน
+- Timelines with placeholders such as `ABC_SC99_XXXX`.
+- Creating running shot numbers such as `0010`, `0020`, `0030`.
+- Restarting numbering when the scene prefix changes.
 
-สิ่งที่ทำ:
+What it does:
 
-- อ่าน title ที่ใช้ Motion template `VFX NAMING`
-- หา pattern ที่ลงท้ายด้วย placeholder `XXXX`
-- แทนที่ placeholder ด้วยเลข shot แบบ running number
-- Import project ใหม่กลับเข้า Final Cut Pro พร้อมชื่อ prefix ของ workflow
+- Reads titles that use the bundled `VFX NAMING` Motion template.
+- Finds names that end with the `XXXX` placeholder.
+- Replaces only the placeholder with a running shot number.
+- Imports an updated project back into Final Cut Pro.
 
-ตัวอย่าง:
+Example:
 
 ```text
 ABC_SC99_XXXX  ->  ABC_SC99_0010
@@ -56,21 +56,21 @@ ABC_SC100_XXXX ->  ABC_SC100_0010
 
 ## 🔁 VFX Reset Naming
 
-รีเซ็ตเลข shot ใน `VFX NAMING` titles กลับไปเป็น `XXXX`
+Resets numbered `VFX NAMING` titles back to the `XXXX` placeholder.
 
-เหมาะกับ:
+Best for:
 
-- ต้องการ renumber timeline ใหม่ทั้งหมด
-- ทดลองเลข shot แล้วอยากย้อนกลับเป็น placeholder
-- Timeline เปลี่ยนลำดับจนเลขเดิมไม่ถูกต้องแล้ว
+- Renumbering a timeline from scratch.
+- Undoing an earlier numbering pass.
+- Resetting after editorial order changes.
 
-สิ่งที่ทำ:
+What it does:
 
-- อ่าน title ที่มีเลข shot อยู่แล้ว เช่น `ABC_SC99_0010`
-- เปลี่ยนเฉพาะส่วนเลข shot กลับเป็น `XXXX`
-- ไม่แตะ prefix/scene ที่อยู่ด้านหน้า
+- Reads numbered titles such as `ABC_SC99_0010`.
+- Changes only the shot-number portion back to `XXXX`.
+- Leaves the prefix and scene name unchanged.
 
-ตัวอย่าง:
+Example:
 
 ```text
 ABC_SC99_0010 -> ABC_SC99_XXXX
@@ -79,39 +79,39 @@ ABC_SC99_0020 -> ABC_SC99_XXXX
 
 ## 🛠 VFX Auto Marker
 
-สร้าง marker จาก `VFX NAMING` titles เพื่อใช้ต่อกับ shot list และ pull workflow
+Creates Final Cut Pro markers from `VFX NAMING` titles so downstream workflows can read shot positions.
 
-เหมาะกับ:
+Best for:
 
-- Timeline ที่ naming พร้อมแล้ว
-- ต้องการ marker เป็นจุดอ้างอิงสำหรับ VFX shot
-- ต้องการเลือกชนิด marker ตามการใช้งานใน Final Cut Pro
+- Timelines where VFX naming is already approved.
+- Creating marker references for VFX Shot List and VFX Pull EDL.
+- Choosing the marker type that best matches the team's workflow.
 
 Marker types:
 
-- `Standard`: marker ปกติ
-- `To Do`: marker สำหรับรายการงานที่ต้อง follow up
-- `Chapter`: marker แบบ chapter
+- `Standard`: regular Final Cut Pro marker.
+- `To Do`: follow-up marker.
+- `Chapter`: chapter marker.
 
-สิ่งที่ทำ:
+What it does:
 
-- ให้เลือก marker type จากเมนู Turnover
-- อ่าน VFX number จาก title
-- ใส่ VFX number ลง marker name
-- ใส่ description/note ลง marker note
-- วาง marker ตามตำแหน่ง title เพื่อให้ workflow อื่นใช้ต่อได้
+- Lets the user choose marker type from the Turnover menu.
+- Reads the VFX number from each naming title.
+- Writes the VFX number into the marker name.
+- Writes title notes/descriptions into the marker note.
+- Places markers at the title positions so other Turnover workflows can use them.
 
 ## 📋 VFX Shot List
 
-สร้าง Excel shot list พร้อม thumbnail จาก timeline ปัจจุบัน
+Builds an Excel shot list with thumbnails from the current timeline.
 
-เหมาะกับ:
+Best for:
 
-- ส่งรายการ VFX ให้ vendor/post house
-- ต้องการ thumbnail ประกอบแต่ละ shot
-- ต้องการ timeline TC, source TC, filename, metadata และ remark ในไฟล์เดียว
+- Sending a VFX shot list to a vendor, online editor, or post supervisor.
+- Including thumbnails for each VFX shot.
+- Collecting timeline timecode, source timecode, filename, metadata, and remarks in one workbook.
 
-ผลลัพธ์:
+Output:
 
 ```text
 Desktop/
@@ -120,7 +120,7 @@ Desktop/
     Thumbnails/
 ```
 
-คอลัมน์หลัก:
+Main columns:
 
 - Thumbnail
 - VFX Number
@@ -133,39 +133,39 @@ Desktop/
 - Metadata
 - Remark
 
-วิธี capture thumbnail:
+Thumbnail capture behavior:
 
-- Turnover ใช้ native plugin capture หน้าต่าง Final Cut Pro ที่ใหญ่ที่สุด
-- ถ้าต้องการ thumbnail จาก fullscreen preview ให้เปิด fullscreen preview ไว้ก่อน run
-- ต้องให้ Screen Recording permission กับ Final Cut Pro/SpliceKit process
+- Turnover captures the largest visible Final Cut Pro window through the native plugin.
+- For the most reliable thumbnails, open the fullscreen viewer before running the tool.
+- macOS Screen Recording permission must be granted for the patched Final Cut Pro/SpliceKit process.
 
-ข้อควรระวัง:
+Important notes:
 
-- ถ้า macOS ยังไม่อนุญาต Screen Recording รูปอาจไม่ขึ้นหรือ capture ผิดหน้าต่าง
-- ถ้า timeline มี overlapping clip ซับซ้อนมาก source range อาจต้องตรวจทานอีกครั้ง
+- If Screen Recording permission is missing, thumbnails may be blank or captured from the wrong window.
+- Timelines with heavy overlap should be checked after export to confirm the source ranges are correct.
 
 ## 🧾 VFX Pull EDL
 
-สร้าง EDL สำหรับ pull source media ตาม VFX markers
+Creates a source-pull EDL from VFX markers.
 
-เหมาะกับ:
+Best for:
 
-- ต้องส่ง source range ให้ทีม online/VFX
-- ต้องการ handle เพิ่มหัวท้าย
-- มีหลาย layer ซ้อนกันใน shot เดียว
+- Sending source ranges to online/VFX.
+- Adding handles to every pulled range.
+- Pulling more than one overlapping layer under the same VFX shot.
 
 Handle frames:
 
-- ค่าที่ใส่คือจำนวนเฟรมที่เพิ่มทั้งหัวและท้าย
-- เช่น ใส่ `8` หมายถึงเพิ่ม head 8 frames และ tail 8 frames
-- ไม่จำเป็นต้องเป็นเลขคู่
+- The entered value is applied to both sides of each source range.
+- Entering `8` adds 8 frames to the head and 8 frames to the tail.
+- The value does not need to be even.
 
 Layer naming:
 
-- Source หลักใช้ `PL01`
-- Source ที่ซ้อนเพิ่มใช้ `EL01`, `EL02`, ต่อไปเรื่อยๆ
+- The primary source uses `PL01`.
+- Additional overlapping sources use `EL01`, `EL02`, and so on.
 
-ผลลัพธ์:
+Output:
 
 ```text
 VFX Pull EDL - <Project Name>.edl
@@ -173,28 +173,28 @@ VFX Pull EDL - <Project Name>.edl
 
 ## 📦 VFX Timeline
 
-นำ VFX render ที่กลับมาจาก post ไปวางกลับบน timeline
+Places returned VFX renders back into the Final Cut Pro timeline.
 
-เหมาะกับ:
+Best for:
 
-- ได้ไฟล์ render จาก vendor แล้วต้องการ conform กลับลง timeline
-- ต้องการวางแบบ connected clip, replace หรือ audition
-- ต้องการ versioning เช่น v1, v2, v3
+- Conforming VFX delivery files back into an editorial timeline.
+- Placing renders as connected clips, replacements, or auditions.
+- Tracking delivery versions such as v1, v2, and v3.
 
 Modes:
 
-- `Connected`: วาง render เป็น connected clip เหนือ timeline
-- `Replace`: แทน VFX เดิม ถ้าไม่มีของเดิมจะ fallback เป็น connected
-- `Audition`: สร้าง audition รวม version ใหม่ ถ้าไม่มีของเดิมจะ fallback เป็น connected
+- `Connected`: places the render as a connected clip above the timeline.
+- `Replace`: replaces an existing VFX item; if no item exists, it falls back to connected mode.
+- `Audition`: adds the render as an audition version; if no item exists, it falls back to connected mode.
 
-ผลลัพธ์:
+Output examples:
 
 ```text
 📦 VFX Deliveries v1 - <Project Name>
 📦 VFX Deliveries v2 - <Project Name>
 ```
 
-ข้อควรระวัง:
+Important notes:
 
-- ชื่อไฟล์ render ต้อง match กับ VFX shot code ให้ชัด
-- Timeline ที่มี title/marker/clip ซ้อนซับซ้อนมากควรตรวจหลัง import
+- Render filenames should clearly match the VFX shot code.
+- Timelines with complex title, marker, or clip overlap should be checked after import.
