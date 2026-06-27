@@ -302,6 +302,7 @@ function classifyTopLevelElements(elements) {
   const buckets = {
     notes: [],
     timeMaps: [],
+    objectTrackers: [],
     intrinsic: [],
     story: [],
     markersAndKeywords: [],
@@ -315,6 +316,7 @@ function classifyTopLevelElements(elements) {
     const tag = item.tag;
     if (tag === "note") buckets.notes.push(item.xml);
     else if (tag === "timeMap") buckets.timeMaps.push(item.xml);
+    else if (tag === "object-tracker") buckets.objectTrackers.push(item.xml);
     else if (tag.startsWith("adjust-")) buckets.intrinsic.push(item.xml);
     else if (["marker", "chapter-marker", "rating", "keyword"].includes(tag)) buckets.markersAndKeywords.push(item.xml);
     else if (tag === "metadata") buckets.metadata.push(item.body);
@@ -330,13 +332,35 @@ function mergeIntrinsicElements(primaryBuckets, outerBuckets) {
   const merged = [];
   const seenTags = new Set();
   const items = [...(outerBuckets?.intrinsic || []), ...(primaryBuckets?.intrinsic || [])];
+  const dtdOrder = new Map([
+    ["adjust-crop", 10],
+    ["adjust-corners", 20],
+    ["adjust-conform", 30],
+    ["adjust-transform", 40],
+    ["adjust-blend", 50],
+    ["adjust-stabilization", 60],
+    ["adjust-rollingShutter", 70],
+    ["adjust-360-transform", 80],
+    ["adjust-reorient", 90],
+    ["adjust-orientation", 100],
+    ["adjust-cinematic", 110],
+    ["adjust-colorConform", 120],
+    ["adjust-volume", 200],
+    ["adjust-panner", 210],
+  ]);
   for (const xml of items) {
     const tag = xml.match(/^<([\w:-]+)/)?.[1] ?? "";
     if (!tag || seenTags.has(tag)) continue;
     seenTags.add(tag);
     merged.push(xml);
   }
-  return merged;
+  return merged
+    .map((xml, index) => {
+      const tag = xml.match(/^<([\w:-]+)/)?.[1] ?? "";
+      return { xml, index, order: dtdOrder.get(tag) ?? 1000 };
+    })
+    .sort((a, b) => (a.order - b.order) || (a.index - b.index))
+    .map((item) => item.xml);
 }
 
 function mergeMetadataBodies(bodies) {
@@ -441,10 +465,11 @@ function quantizeTime(value, den = 2400n) {
 }
 
 function parseTimeMapXML(xml) {
-  const match = xml.match(/<timeMap>([\s\S]*?)<\/timeMap>/);
+  const match = xml.match(/<timeMap\b([^>]*)>([\s\S]*?)<\/timeMap>/);
   if (!match) return [];
+  const timeMapAttrs = parseAttrs(match[1] ?? "");
   const points = [];
-  for (const point of match[1].matchAll(/<timept\b([^>]*)\/>/g)) {
+  for (const point of match[2].matchAll(/<timept\b([^>]*)\/>/g)) {
     const attrs = parseAttrs(point[1] ?? "");
     const time = parseTimeValue(attrs.time || "");
     const value = parseTimeValue(attrs.value || "");
@@ -453,28 +478,42 @@ function parseTimeMapXML(xml) {
     const outTime = parseTimeValue(attrs.outTime || "");
     points.push({ time, value, interp: attrs.interp || "smooth2", inTime, outTime });
   }
+  points._attrs = timeMapAttrs;
   return points;
 }
 
 function quantizeTimeMapPoints(points, den = 2400n) {
-  return (points || []).map((pt) => ({
+  const out = (points || []).map((pt) => ({
     ...pt,
     time: quantizeTime(pt.time, den),
     value: quantizeTime(pt.value, den),
     inTime: pt.inTime ? quantizeTime(pt.inTime, den) : undefined,
     outTime: pt.outTime ? quantizeTime(pt.outTime, den) : undefined,
   }));
+  if (points?._attrs) out._attrs = { ...points._attrs };
+  return out;
 }
 
-function buildTimeMapXML(points) {
+function withTimeMapAttrs(points, attrs) {
+  if (!points) return points;
+  if (attrs && Object.keys(attrs).length > 0) points._attrs = { ...attrs };
+  return points;
+}
+
+function buildTimeMapXML(points, timeMapAttrs = null) {
   if (!points || points.length < 2) return "";
+  const sourceAttrs = timeMapAttrs || points._attrs || {};
+  const openAttrs = Object.entries(sourceAttrs)
+    .filter(([key, value]) => key && value != null && value !== "")
+    .map(([key, value]) => ` ${key}="${escapeAttr(value)}"`)
+    .join("");
   const body = points.map((pt) => {
     let attrs = `time="${escapeAttr(formatTimeValue(pt.time))}" value="${escapeAttr(formatTimeValue(pt.value))}" interp="${escapeAttr(pt.interp || "smooth2")}"`;
     if (pt.inTime) attrs += ` inTime="${escapeAttr(formatTimeValue(pt.inTime))}"`;
     if (pt.outTime) attrs += ` outTime="${escapeAttr(formatTimeValue(pt.outTime))}"`;
     return `                                    <timept ${attrs}/>`;
   }).join("\n");
-  return `<timeMap>\n${body}\n                                </timeMap>`;
+  return `<timeMap${openAttrs}>\n${body}\n                                </timeMap>`;
 }
 
 function debugDescribePoints(points, label) {
@@ -975,10 +1014,12 @@ function deriveVisibleSourceStartFromOuterOnly(outerPoints, primaryOffset, prima
 
 function rebaseOuterOnlyTimeMapToClipDomain(outerPoints, syncStart, clipStart) {
   if (!outerPoints?.length || !syncStart || !clipStart) return outerPoints || [];
-  return outerPoints.map((point) => ({
+  const out = outerPoints.map((point) => ({
     ...point,
     time: addTime(clipStart, subTime(point.time, syncStart)),
   }));
+  if (outerPoints._attrs) out._attrs = { ...outerPoints._attrs };
+  return out;
 }
 
 function rebaseOuterOnlyTimeMapToFlattenedClip(
@@ -989,13 +1030,64 @@ function rebaseOuterOnlyTimeMapToFlattenedClip(
   primaryStart
 ) {
   if (!outerPoints?.length) return outerPoints || [];
-  return rebaseOuterOnlyTimeMapToClipDomain(outerPoints, syncStart, clipStart).map((point) => ({
+  const rebased = rebaseOuterOnlyTimeMapToClipDomain(outerPoints, syncStart, clipStart);
+  const out = rebased.map((point) => ({
     ...point,
     value:
       primaryOffset && primaryStart
         ? mapOuterValueToInnerTime(point.value, primaryOffset, primaryStart) || point.value
         : point.value,
   }));
+  if (rebased._attrs) out._attrs = { ...rebased._attrs };
+  return out;
+}
+
+function timeRangesOverlap(startA, endA, startB, endB) {
+  return compareTime(startA, endB) < 0 && compareTime(endA, startB) > 0;
+}
+
+function hasHoldSegmentOverlappingRange(points, rangeStart, rangeEnd) {
+  if (!points?.length || !rangeStart || !rangeEnd) return false;
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const a = points[i];
+    const b = points[i + 1];
+    if (compareTime(a.value, b.value) !== 0) continue;
+    if (compareTime(a.time, b.time) >= 0) continue;
+    if (timeRangesOverlap(a.time, b.time, rangeStart, rangeEnd)) return true;
+  }
+  return false;
+}
+
+function trimTimeMapToRange(points, rangeStart, rangeEnd) {
+  if (!points?.length || !rangeStart || !rangeEnd || compareTime(rangeEnd, rangeStart) <= 0) {
+    return points || [];
+  }
+  const out = [];
+  const push = (pt) => {
+    if (!pt?.time || !pt?.value) return;
+    const last = out[out.length - 1];
+    if (
+      last &&
+      compareTime(last.time, pt.time) === 0 &&
+      compareTime(last.value, pt.value) === 0
+    ) {
+      return;
+    }
+    out.push(pt);
+  };
+
+  const startValue = interpolateTimeMap(points, rangeStart);
+  if (startValue) push({ time: rangeStart, value: startValue, interp: "smooth2" });
+
+  for (const pt of points) {
+    if (compareTime(pt.time, rangeStart) <= 0) continue;
+    if (compareTime(pt.time, rangeEnd) >= 0) continue;
+    push({ ...pt, inTime: undefined, outTime: undefined });
+  }
+
+  const endValue = interpolateTimeMap(points, rangeEnd);
+  if (endValue) push({ time: rangeEnd, value: endValue, interp: "smooth2" });
+  return out.length >= 2 ? dedupeTimePoints(out) : points || [];
 }
 
 function shiftTimeMapValues(points, delta) {
@@ -1587,11 +1679,14 @@ function rebaseStoryItemXML(xml, oldBaseValue, newBaseValue) {
   return replaceAttrInXML(xml, "offset", formatTimeValue(shifted));
 }
 
-function outerTitlesFitWithinClipWindow(titleXmlItems, clipOffsetValue, clipDurationValue) {
+function outerTitlesFitWithinClipWindow(titleXmlItems, clipOffsetValue, clipDurationValue, tailToleranceFrames = 0n) {
   const clipOffset = parseTimeValue(clipOffsetValue || "");
   const clipDuration = parseTimeValue(clipDurationValue || "");
   if (!clipOffset || !clipDuration) return false;
-  const clipEnd = addTime(clipOffset, clipDuration);
+  const clipEnd = addTime(
+    addTime(clipOffset, clipDuration),
+    { num: BigInt(tailToleranceFrames), den: 24n }
+  );
   for (const xml of titleXmlItems || []) {
     const open = xml.match(/^<title\b([^>]*)>/);
     if (!open) return false;
@@ -1604,6 +1699,11 @@ function outerTitlesFitWithinClipWindow(titleXmlItems, clipOffsetValue, clipDura
     if (compareTime(end, clipEnd) > 0) return false;
   }
   return true;
+}
+
+function storyItemFitsClipWindow(xml, clipOffsetValue, clipDurationValue, tailToleranceFrames = 0n) {
+  if (!xml || !xml.startsWith("<title")) return false;
+  return outerTitlesFitWithinClipWindow([xml], clipOffsetValue, clipDurationValue, tailToleranceFrames);
 }
 
 function snapSiblingTitleOffsetToFrameBoundary(xml, fps = 24n) {
@@ -1649,6 +1749,12 @@ function parseMarkerInfo(xml) {
     note: trim(attrs.note || ""),
     start: trim(attrs.start || ""),
   };
+}
+
+function isUnnamedSourceMarkerXML(xml) {
+  const info = parseMarkerInfo(xml);
+  if (!info) return false;
+  return /^Marker\s+\d+$/i.test(info.value) && !info.note;
 }
 
 function shouldForceSimpleSyncTitleBundleInsideClip(storyItems, markerItems = []) {
@@ -1754,12 +1860,29 @@ function expandStoryXML(xmlList) {
   return expanded;
 }
 
-function shiftedStartForFlattenedPrimary(primaryAttrs, syncAttrs, outputTag) {
+function shiftedStartForFlattenedPrimary(primaryAttrs, syncAttrs, outputTag, options = {}) {
   const primaryStart = parseTimeValue(primaryAttrs.start || "");
   const primaryOffset = parseTimeValue(primaryAttrs.offset || "");
+  const primaryDuration = parseTimeValue(primaryAttrs.duration || "");
   const syncStart = parseTimeValue(syncAttrs.start || "");
-  if (!primaryStart || !primaryOffset || !syncStart) {
+  if (!syncStart) return trim(primaryAttrs.start);
+  if (!primaryStart) {
+    // Some simple sync-clips contain a child clip/video at offset 0 without an
+    // explicit `start`. In that structure the sync container's `start` is the
+    // visible source-in. If we leave `start` blank after flattening, FCP starts
+    // the flattened source from 0s and the clip lands in the wrong section.
+    const localOffset = primaryOffset || parseTimeValue("0s");
+    return formatTimeValue(subTime(syncStart, localOffset));
+  }
+  if (!primaryOffset) {
     return trim(primaryAttrs.start);
+  }
+  if (options.fromSpine && primaryDuration) {
+    const localDelta = subTime(syncStart, primaryOffset);
+    const zero = parseTimeValue("0s");
+    if (compareTime(localDelta, zero) < 0 || compareTime(localDelta, primaryDuration) > 0) {
+      return trim(primaryAttrs.start);
+    }
   }
   // Source timecode must come from the original clip inside the sync-clip.
   // The visible source-in is the original clip's source start plus the local
@@ -1815,7 +1938,12 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
       for (const key of ["lane", "enabled", "duration", "audioStart", "audioDuration", "modDate"]) {
         if (node.attrs[key] != null && node.attrs[key] !== "") attrs[key] = node.attrs[key];
       }
-      const effectiveStart = shiftedStartForFlattenedPrimary(analyzed.primary.attrs, node.attrs, outputTag);
+      const effectiveStart = shiftedStartForFlattenedPrimary(
+        analyzed.primary.attrs,
+        node.attrs,
+        outputTag,
+        { fromSpine: analyzed.fromSpine }
+      );
       if (effectiveStart) attrs.start = effectiveStart;
       const primaryBuckets = classifyTopLevelElements(collectTopLevelElements(analyzed.primary.body));
       const outerBuckets = classifyTopLevelElements(analyzed.outerExtras);
@@ -1938,10 +2066,7 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
           (outerBuckets.markersAndKeywords || []).length > 0
         );
       const forceOuterTitlesInsideKnownNested =
-        (
-          keepOuterStoryInsideKnownNestedCases.has(flattenedPrimaryName) ||
-          hasOuterEditorialBundleOnNestedClip
-        ) &&
+        hasOuterEditorialBundleOnNestedClip &&
         (outerBuckets.story || []).length > 0 &&
         (outerBuckets.story || []).every((xml) => xml.startsWith("<title"));
       const forceSimpleSyncTitleBundleInsideClip =
@@ -1959,7 +2084,6 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
             analyzed.fromSpine &&
             (
               !hasNestedRetimes ||
-              keepOuterStoryInsideKnownNestedCases.has(flattenedPrimaryName) ||
               hasOuterEditorialBundleOnNestedClip
             )
           ));
@@ -2217,7 +2341,9 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
       }
       const effectiveTimeMapXML =
         composedTimeMapPoints.length >= 2
-          ? buildTimeMapXML(composedTimeMapPoints)
+          ? buildTimeMapXML(
+              withTimeMapAttrs(composedTimeMapPoints, outerTimeMapPoints._attrs || primaryTimeMapPoints._attrs)
+            )
           : hasOuterOnlyRetime
           ? (() => {
               const clipStartValue = parseTimeValue(attrs.start || "");
@@ -2228,7 +2354,17 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
                 primaryOffsetValue,
                 primaryStartValue
               );
-              return buildTimeMapXML(quantizeTimeMapPoints(rebasedOuterOnlyPoints, 2400n));
+              const clipDurationValue = parseTimeValue(attrs.duration || "");
+              const clipEndValue = clipStartValue && clipDurationValue
+                ? addTime(clipStartValue, clipDurationValue)
+                : null;
+              const visibleOuterOnlyPoints =
+                clipStartValue &&
+                clipEndValue &&
+                hasHoldSegmentOverlappingRange(rebasedOuterOnlyPoints, clipStartValue, clipEndValue)
+                  ? trimTimeMapToRange(rebasedOuterOnlyPoints, clipStartValue, clipEndValue)
+                  : rebasedOuterOnlyPoints;
+              return buildTimeMapXML(quantizeTimeMapPoints(visibleOuterOnlyPoints, 2400n));
             })()
           : null;
       if (keepTitlesInsideAssetClip || keepOuterStoryInsideClip) {
@@ -2237,6 +2373,24 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
 
       const rebasedOuterTitles = (outerBuckets.story || []).map((item) =>
         rebaseStoryItemXML(item, node.attrs.start, nestedStoryBase)
+      );
+      const genericOuterTitleInsideItems = !(
+        keepTitlesInsideAssetClip ||
+        keepOuterStoryInsideClip ||
+        forceOuterTitlesInsideKnownNested
+      ) && outputTag === "clip"
+        ? (outerBuckets.story || []).filter((item) =>
+            storyItemFitsClipWindow(
+              rebaseStoryItemXML(item, node.attrs.start, node.attrs.offset),
+              attrs.offset,
+              attrs.duration,
+              6n
+            )
+          )
+        : [];
+      const genericOuterTitleInsideSet = new Set(genericOuterTitleInsideItems);
+      const rebasedGenericOuterTitlesInside = genericOuterTitleInsideItems.map((item) =>
+        rebaseStoryItemXML(item, node.attrs.start, attrs.start)
       );
       const rebasedOuterIntrinsic = (outerBuckets.intrinsic || []).map((item) =>
         rebaseKeyframeTimesInXML(item, node.attrs.start, attrs.start)
@@ -2255,14 +2409,18 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
         ...outerBuckets.markersAndKeywords,
       ].map((item) => rebaseMarkerOrKeywordXML(item, node.attrs.start, attrs.start));
       const finalPrimaryMarkers = keepMarkersOnNestedClip
-        ? primaryMarkers.map((item) =>
-            clampMarkerOrKeywordXMLToClip(item, attrs.start, attrs.duration)
-          )
+        ? primaryMarkers
+            .filter((item) => !isUnnamedSourceMarkerXML(item))
+            .map((item) =>
+              clampMarkerOrKeywordXMLToClip(item, attrs.start, attrs.duration)
+            )
         : [];
       const finalOuterMarkers = keepOuterMarkersInsideClip
-        ? rebasedOuterMarkers.map((item) =>
-            clampMarkerOrKeywordXMLToClip(item, attrs.start, attrs.duration)
-          )
+        ? rebasedOuterMarkers
+            .filter((item) => !isUnnamedSourceMarkerXML(item))
+            .map((item) =>
+              clampMarkerOrKeywordXMLToClip(item, attrs.start, attrs.duration)
+            )
         : [];
       const trailingOuterMarkers = [];
       const dedupedPrimaryMarkers = dedupeXMLItems(finalPrimaryMarkers);
@@ -2297,6 +2455,10 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
       [
         ...(keepNotesOnNestedClip ? hoistedPrimaryBuckets.notes : []),
         ...(effectiveTimeMapXML ? [effectiveTimeMapXML] : hoistedPrimaryBuckets.timeMaps),
+        ...dedupeXMLItems([
+          ...(outerBuckets.objectTrackers || []),
+          ...(hoistedPrimaryBuckets.objectTrackers || []),
+        ]),
         ...mergeIntrinsicElements(
           hoistedPrimaryBuckets,
           {
@@ -2307,6 +2469,7 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
         ...(keepPrimaryStoryInside ? wrappedPrimaryStory : []),
         ...(keepPrimaryStoryInside ? hoistedPrimaryBuckets.story : []),
         ...(keepTitlesInsideAssetClip || keepOuterStoryInsideClip || forceOuterTitlesInsideKnownNested ? rebasedOuterTitles : []),
+        ...rebasedGenericOuterTitlesInside,
         ...dedupedPrimaryMarkers,
         ...dedupedOuterMarkers,
         ...hoistedPrimaryBuckets.audioComp,
@@ -2325,11 +2488,16 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
 
       const trailingStorySource = keepTitlesInsideAssetClip || keepOuterStoryInsideClip || forceOuterTitlesInsideKnownNested
         ? [...storyBuckets.story].filter(Boolean)
-        : [...storyBuckets.story, ...outerBuckets.story].filter(Boolean);
-      // For generic outer titles/story items, preserve the original timeline-facing
-      // offsets/durations instead of rebasing again. Rebased sibling titles were
-      // the main cause of "missing", collapsed, or wrong-length titles on real
-      // timelines with many independent title items.
+        : [
+            ...storyBuckets.story,
+            // Titles carried by a sync-clip live in the sync's source/start time
+            // domain. When hoisting them back to the parent spine, preserve their
+            // delta from the sync start but move that delta onto the sync's real
+            // timeline offset so Final Cut does not drop them during import.
+            ...(outerBuckets.story || [])
+              .filter((item) => !genericOuterTitleInsideSet.has(item))
+              .map((item) => rebaseStoryItemXML(item, node.attrs.start, node.attrs.offset)),
+          ].filter(Boolean);
       const trailingStory = expandStoryXML(trailingStorySource)
         .map((item) => snapSiblingTitleOffsetToFrameBoundary(item))
         .join("\n");
@@ -2506,17 +2674,16 @@ function normalizeNestedTitleOffsets(xml, reportLines) {
       const node = stack.pop();
       if (!node || node.tag !== tagName) continue;
       const body = xml.slice(node.openEnd, match.index);
-      const parentStart = trim(node.attrs.start);
-      if (!parentStart || !body.includes("<title")) continue;
+      if (!body.includes("<title")) continue;
 
       const elements = collectTopLevelElements(body);
       let changed = 0;
       const rebuilt = elements.map((item) => {
         if (item.tag !== "title") return item.xml;
-        const currentOffset = trim(item.attrs.offset);
-        if (!currentOffset || currentOffset === parentStart) return item.xml;
+        const snapped = snapSiblingTitleOffsetToFrameBoundary(item.xml);
+        if (snapped === item.xml) return item.xml;
         changed += 1;
-        return replaceAttrInXML(item.xml, "offset", parentStart);
+        return snapped;
       }).join("\n");
 
       if (changed === 0) continue;
@@ -2525,7 +2692,7 @@ function normalizeNestedTitleOffsets(xml, reportLines) {
         end: match.index,
         replacement: rebuilt,
       });
-      reportLines.push(`normalized nested title offsets in ${tagName}: ${trim(node.attrs.name) || "(unnamed)"}`);
+      reportLines.push(`snapped nested title offsets in ${tagName}: ${trim(node.attrs.name) || "(unnamed)"} (${changed})`);
     }
   }
 
@@ -2535,6 +2702,107 @@ function normalizeNestedTitleOffsets(xml, reportLines) {
     patched = patched.slice(0, replacement.start) + replacement.replacement + patched.slice(replacement.end);
   }
   return { xml: patched, count: replacements.length };
+}
+
+function removeUnnamedSourceMarkers(xml) {
+  let count = 0;
+  const patched = xml.replace(/<marker\b([^>]*?)(?:\/>|>[\s\S]*?<\/marker>)/g, (match, attrStr) => {
+    const attrs = parseAttrs(attrStr || "");
+    if (!/^Marker\s+\d+$/i.test(trim(attrs.value || ""))) return match;
+    if (trim(attrs.note || "")) return match;
+    count += 1;
+    return "";
+  });
+  return { xml: patched, count };
+}
+
+function insertStoryItemIntoClipXML(clipXML, storyXML) {
+  const close = clipXML.match(/<\/(clip|asset-clip)>\s*$/);
+  if (!close) return clipXML;
+  const closeIndex = close.index ?? clipXML.length;
+  const open = clipXML.match(/^<(clip|asset-clip)\b[^>]*>/);
+  if (!open) return clipXML;
+  const bodyStart = open[0].length;
+  const body = clipXML.slice(bodyStart, closeIndex);
+  const elements = collectTopLevelElements(body);
+  const insertBeforeTags = new Set([
+    "marker",
+    "chapter-marker",
+    "rating",
+    "keyword",
+    "audio-role-source",
+    "filter-video",
+    "filter-audio",
+    "metadata",
+  ]);
+  const insertBefore = elements.find((item) => insertBeforeTags.has(item.tag));
+  if (!insertBefore) {
+    return `${clipXML.slice(0, closeIndex)}\n${storyXML}\n${clipXML.slice(closeIndex)}`;
+  }
+  const insertIndex = bodyStart + insertBefore.xml.length >= 0
+    ? clipXML.indexOf(insertBefore.xml, bodyStart)
+    : -1;
+  if (insertIndex < 0) {
+    return `${clipXML.slice(0, closeIndex)}\n${storyXML}\n${clipXML.slice(closeIndex)}`;
+  }
+  return `${clipXML.slice(0, insertIndex)}${storyXML}\n${clipXML.slice(insertIndex)}`;
+}
+
+function relocateClipLocalSiblingTitles(xml, reportLines) {
+  const spineMatch = xml.match(/<spine>([\s\S]*?)<\/spine>/);
+  if (!spineMatch) return { xml, count: 0 };
+  const spineBody = spineMatch[1];
+  const elements = collectTopLevelElements(spineBody);
+  const relocatedByIndex = new Map();
+  const removedTitleIndexes = new Set();
+
+  for (let index = 0; index < elements.length; index += 1) {
+    const item = elements[index];
+    if (item.tag !== "title") continue;
+
+    let targetIndex = -1;
+    for (let candidateIndex = index - 1; candidateIndex >= 0; candidateIndex -= 1) {
+      const candidate = elements[candidateIndex];
+      if (!["clip", "asset-clip"].includes(candidate.tag)) continue;
+      if (
+        storyItemFitsClipWindow(
+          item.xml,
+          candidate.attrs.offset,
+          candidate.attrs.duration,
+          6n
+        )
+      ) {
+        targetIndex = candidateIndex;
+        break;
+      }
+      const candidateOffset = parseTimeValue(candidate.attrs.offset || "");
+      const titleOffset = parseTimeValue(item.attrs.offset || "");
+      if (candidateOffset && titleOffset && compareTime(candidateOffset, titleOffset) < 0) {
+        break;
+      }
+    }
+    if (targetIndex < 0) continue;
+
+    const target = elements[targetIndex];
+    const nestedTitle = rebaseStoryItemXML(item.xml, target.attrs.offset, target.attrs.start);
+    const bucket = relocatedByIndex.get(targetIndex) || [];
+    bucket.push(nestedTitle);
+    relocatedByIndex.set(targetIndex, bucket);
+    removedTitleIndexes.add(index);
+  }
+
+  if (removedTitleIndexes.size === 0) return { xml, count: 0 };
+
+  const rebuilt = elements.map((item, index) => {
+    if (removedTitleIndexes.has(index)) return "";
+    const relocated = relocatedByIndex.get(index) || [];
+    if (relocated.length === 0) return item.xml;
+    return relocated.reduce((clipXML, titleXML) => insertStoryItemIntoClipXML(clipXML, titleXML), item.xml);
+  }).filter(Boolean).join("\n");
+
+  reportLines.push(`relocated clip-local sibling titles: ${removedTitleIndexes.size}`);
+  const patched = `${xml.slice(0, spineMatch.index)}<spine>${rebuilt}</spine>${xml.slice((spineMatch.index ?? 0) + spineMatch[0].length)}`;
+  return { xml: patched, count: removedTitleIndexes.size };
 }
 
 function dtdCandidatePaths(version) {
@@ -2653,6 +2921,14 @@ async function main() {
   patched = normalizedNestedTitles.xml;
   report.push(`nested title offsets normalized: ${normalizedNestedTitles.count}`);
 
+  const strippedUnnamedMarkers = removeUnnamedSourceMarkers(patched);
+  patched = strippedUnnamedMarkers.xml;
+  report.push(`unnamed source markers removed: ${strippedUnnamedMarkers.count}`);
+
+  const relocatedSiblingTitles = relocateClipLocalSiblingTitles(patched, report);
+  patched = relocatedSiblingTitles.xml;
+  report.push(`clip-local sibling titles relocated: ${relocatedSiblingTitles.count}`);
+
   const remainingSync = countMatches(patched, /<sync-clip\b/g);
   const remainingMc = countMatches(patched, /<mc-clip\b/g);
   report.push(`remaining sync-clips: ${remainingSync}`);
@@ -2662,6 +2938,7 @@ async function main() {
     for (const name of listRemainingSyncClipNames(patched)) report.push(`- ${name}`);
   }
   report.push("notes:");
+  report.push("- IMPORTANT: For clean flatten validation, clear editorial titles/markers before running Conform Prep when possible. Existing titles/markers can be preserved best-effort, but they can also create import-side noise that hides the real flattening result.");
   report.push("- v1 flattens simple sync-clips conservatively");
   report.push("- v1 renames source-backed clips to source filenames");
   report.push("- multicam flattening and complex retime flattening still need more work");

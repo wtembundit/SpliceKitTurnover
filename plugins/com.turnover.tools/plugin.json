@@ -34,8 +34,20 @@
       "readOnly": false
     },
     {
+      "name": "conform_prep_verify",
+      "description": "Verify a Conform Prep result by choosing original/imported XML and optional CSV files",
+      "params": {},
+      "readOnly": false
+    },
+    {
       "name": "vfx_timeline",
       "description": "Run VFX Timeline",
+      "params": {},
+      "readOnly": false
+    },
+    {
+      "name": "vfx_shot_list_recover",
+      "description": "Generate VFX Shot List Excel from current timeline data and an existing thumbnail folder without recapturing",
       "params": {},
       "readOnly": false
     },
@@ -43,7 +55,8 @@
       "name": "vfx_auto_marker",
       "description": "Run VFX Auto Marker by marker kind",
       "params": {
-        "marker_kind": { "type": "string", "required": true, "description": "standard, todo, or chapter" }
+        "marker_kind": { "type": "string", "required": true, "description": "standard, todo, or chapter" },
+        "rename_markers": { "type": "boolean", "required": false, "description": "Optional. Rename/note markers from VFX titles via FCPXML import. Defaults to false." }
       },
       "readOnly": false
     },

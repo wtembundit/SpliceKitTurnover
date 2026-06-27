@@ -12,11 +12,8 @@
 --   1) Export current project to temp FCPXML
 --   2) Parse VFX NAMING titles from that export
 --   3) Create markers live with the chosen type
---   4) Export again until enough markers appear
---   5) Relabel marker value/note by interval matching
---   6) Prefix imported project name
---   7) Import patched XML back into FCP
---   8) Clean temp files
+--   4) Optionally relabel marker value/note by FCPXML import when enabled
+--      from the Turnover UI. The safe default is marker anchors only.
 
 local CONFIG = {
     TITLE_MATCH = "VFX NAMING",
@@ -24,6 +21,7 @@ local CONFIG = {
     DRY_RUN_PARSE = false,
     DRY_RUN_LIVE  = false,
     DRY_RUN_XML   = false,
+    RENAME_MARKERS = false,
 
     LIVE_SLEEP_SEC = 0.05,
     AUTO_IMPORT = true,
@@ -50,6 +48,11 @@ local CONFIG = {
 
     MARKER_KIND = "chapter",
 }
+
+local function config_path()
+    local home = os.getenv("HOME") or "/tmp"
+    return home .. "/Library/Application Support/SpliceKit/plugins/com.turnover.tools/data/VFX_Auto_Marker_Config.tsv"
+end
 
 local CLIP_LIKE = {
     ["audio"] = true, ["video"] = true, ["clip"] = true, ["title"] = true,
@@ -102,6 +105,24 @@ local function read_file(path)
     local f, err = io.open(path, "rb")
     if not f then error("Cannot open file: " .. tostring(err)) end
     local s = f:read("*a"); f:close(); return s
+end
+
+local function apply_runtime_config()
+    local path = config_path()
+    local f = io.open(path, "rb")
+    if not f then return end
+    local text = f:read("*a") or ""
+    f:close()
+    for line in text:gmatch("[^\r\n]+") do
+        local key, value = line:match("^([^\t]+)\t(.*)$")
+        key = lower(trim(key or ""))
+        value = lower(trim(value or ""))
+        if key == "rename_markers" then
+            CONFIG.RENAME_MARKERS = (value == "1" or value == "true" or value == "yes")
+        elseif key == "marker_kind" and value ~= "" then
+            CONFIG.MARKER_KIND = value
+        end
+    end
 end
 
 local function write_file(path, content)
@@ -225,9 +246,9 @@ local function parse_source_titles(xml)
                 stack[#stack] = nil
                 if node.tag == "title" then
                     local title_name = node.attrs.name or ""
+                    local inner = xml:sub(node.open_end + 1, s - 1)
+                    local title_text = extract_text_from_inner(inner)
                     if is_vfx_title(title_name, title_text) then
-                        local inner = xml:sub(node.open_end + 1, s - 1)
-                        local title_text = extract_text_from_inner(inner)
                         local marker_name, marker_note = derive_marker_name_and_note(title_name, title_text)
                         titles[#titles+1] = {
                             source_title_name = title_name,
@@ -586,6 +607,7 @@ local function marker_kind()
 end
 
 local function main()
+    apply_runtime_config()
     local kind = marker_kind()
     local base = tmp_base()
     local source_export_path = base .. "_source_export.fcpxml"
@@ -612,7 +634,11 @@ local function main()
     end
 
     run_live_create(events, kind)
-    run_xml_relabel(events, kind)
+    if CONFIG.RENAME_MARKERS then
+        run_xml_relabel(events, kind)
+    else
+        log("Skipping XML relabel/import; marker anchors only.")
+    end
 
     if CONFIG.CLEANUP_EXPORT_TRIES then
         delete_file(source_export_path)

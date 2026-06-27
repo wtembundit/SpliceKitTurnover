@@ -10,10 +10,13 @@ Turnover is usable for the current tested workflows, but it is still a work in p
 
 If a timeline fails or imports with missing/shifted elements, keep the original project/XML and report the smallest reproducible case so the generic rules can be improved.
 
+**Conform Prep preflight:** duplicate the timeline and clear editorial titles/markers before validating source flattening whenever possible. Title/marker preservation is best-effort; leaving them in can create misleading import-side noise while debugging the actual clip flatten.
+
 ## Documentation
 
 - [Turnover Tools Guide](docs/turnover-tools.md): detailed workflow descriptions and usage notes.
 - [Conform Prep Guide](docs/conform-prep.md): detailed explanation of sync-clip flattening, retime math, speed ramps, titles, markers, transforms, metadata, and known limits.
+- [VFX Row Resolver Contract](docs/vfx-row-resolver-contract.md): implementation note for keeping `VFX Shot List` and `VFX Pull EDL` aligned.
 - [Release Notes v1.1.0](docs/release-notes-v1.1.0.md): plugin migration notes and current limitations.
 
 ## Tools
@@ -62,18 +65,24 @@ TURNOVER_NODE_PATH=/path/to/node ./plugins/com.turnover.tools/Build\ And\ Instal
 
 ## Install
 
-From this repository root:
+Double-click:
 
-```zsh
-./plugins/com.turnover.tools/Build\ And\ Install\ Turnover\ Tools\ Plugin.command
+```text
+Install Turnover.command
+```
+
+The installer opens Terminal, builds the native plugin, installs the bundled `VFX Naming` Motion title template, and copies the plugin to:
+
+```text
+~/Library/Application Support/SpliceKit/plugins/com.turnover.tools
 ```
 
 Then restart the patched Final Cut Pro.
 
-The installer builds the native plugin, installs the bundled `VFX Naming` Motion title template, and copies the plugin to:
+Advanced terminal install from this repository root:
 
-```text
-~/Library/Application Support/SpliceKit/plugins/com.turnover.tools
+```zsh
+./plugins/com.turnover.tools/Build\ And\ Install\ Turnover\ Tools\ Plugin.command
 ```
 
 After restart, use the `Turnover` menu in Final Cut Pro. `Open Turnover` opens the plugin panel, and the workflow commands are listed directly under the same menu.

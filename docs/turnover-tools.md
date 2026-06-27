@@ -10,6 +10,8 @@ Prepares a timeline for VFX conform by flattening `sync-clip` items into easier-
 
 For the deeper technical guide, see [Conform Prep Guide](./conform-prep.md).
 
+For FCPXML validation and DTD safety notes, see [FCPXML DTD Safety Layer Notes](./fcpxml-dtd-safety-layer.md).
+
 Best for:
 
 - Timelines with many `sync-clip` items that need to become source-backed clips.
@@ -26,6 +28,7 @@ What it does:
 
 Important notes:
 
+- **Preflight:** for the cleanest Conform Prep result, duplicate the timeline and remove editorial titles/markers before running. Title/marker preservation is best-effort and can create misleading import noise while debugging source flattening.
 - Not every FCPXML shape is guaranteed yet, especially multicam and retime patterns we have not tested.
 - If a clip disappears or titles/markers drift after import, keep both the original XML and generated XML as a reproducible test case.
 
@@ -97,9 +100,13 @@ What it does:
 
 - Lets the user choose marker type from the Turnover menu.
 - Reads the VFX number from each naming title.
-- Writes the VFX number into the marker name.
-- Writes title notes/descriptions into the marker note.
 - Places markers at the title positions so other Turnover workflows can use them.
+- By default, creates stable marker anchors only and does not import patched marker XML back into Final Cut Pro.
+- Optional `Rename markers from VFX titles` writes VFX numbers and notes back into marker names/notes through FCPXML import. This is off by default because complex timelines can be less stable during marker relabel/import.
+
+`VFX Shot List` does not require renamed markers. It treats VFX titles as the source of truth for shot number and description, then uses markers as capture anchors.
+
+Implementation note: `VFX Shot List` and `VFX Pull EDL` intentionally share the same VFX row model. If title/marker matching changes in one tool, recheck the other tool before release. See [VFX Row Resolver Contract](./vfx-row-resolver-contract.md).
 
 ## 📋 VFX Shot List
 
@@ -143,6 +150,7 @@ Important notes:
 
 - If Screen Recording permission is missing, thumbnails may be blank or captured from the wrong window.
 - Timelines with heavy overlap should be checked after export to confirm the source ranges are correct.
+- `VFX Shot List` and `VFX Pull EDL` should resolve the same VFX shot set. Both tools use markers as anchors and `VFX NAMING` titles as the source of VFX number, note, and visible range.
 
 ## 🧾 VFX Pull EDL
 
@@ -170,6 +178,11 @@ Output:
 ```text
 VFX Pull EDL - <Project Name>.edl
 ```
+
+Important notes:
+
+- Renamed markers are not required. `VFX Pull EDL` uses marker positions as anchors and reads VFX number/note from `VFX NAMING` titles, matching the `VFX Shot List` row model.
+- If `VFX Shot List` row detection changes, recheck `VFX Pull EDL` counts, source filenames, handles, and layer rows against the same timeline.
 
 ## 📦 VFX Timeline
 

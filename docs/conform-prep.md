@@ -2,6 +2,22 @@
 
 `Conform Prep` converts timelines that contain `sync-clip` items into timelines that reference the original source clips more directly. The goal is to make VFX and online conform easier by preserving source filenames, visible source timecode, retime behavior, titles, markers, transforms, and metadata as closely as possible.
 
+Related implementation note: [Conform Prep Title And Marker Preservation Notes](./conform-prep-title-marker-preservation.md).
+
+FCPXML validation note: [FCPXML DTD Safety Layer Notes](./fcpxml-dtd-safety-layer.md).
+
+## ⚠️ Important Preflight: Clear Titles And Markers
+
+**Strong recommendation:** before using `Conform Prep` for real flatten validation, duplicate the timeline and clear editorial titles and markers first.
+
+`Conform Prep` still preserves titles and markers on a best-effort basis, but these items can introduce Final Cut Pro import behavior that looks like a flattening bug when the underlying source clip conversion is actually correct. If titles or markers are left in the timeline, shifted/missing/extra title or marker behavior should be treated as a separate preservation issue, not as proof that the flattened source timing is wrong.
+
+For clean debugging, validate in this order:
+
+1. Flatten a copy with titles and markers removed.
+2. Confirm clips, source filenames, visible source TC, retime, transforms, and metadata.
+3. Reintroduce title/marker preservation only after the source flattening is confirmed.
+
 ## 🎯 Goals
 
 - Reduce nested `sync-clip` items into source-backed clips where possible.
@@ -81,6 +97,12 @@ Conform Prep tries to move connected elements by their real timeline position in
 
 The current rule set uses both timeline range and connection point. This area is improving, but unusual title and marker structures should still be checked after import.
 
+### Marker Cleanup Note
+
+Some source clips carry generic unnamed markers such as `Marker 1` or `Marker 2` with no note. When a sync clip is flattened, those source markers can become visible on the turnover timeline even though they are not editorial/VFX markers. Conform Prep now removes only these unnamed source markers while preserving markers that carry shot codes, notes, CG descriptions, ADR notes, or other user-authored metadata.
+
+This same rule is useful for Auto Marker fixes: filter default unnamed source markers separately from real editorial markers, and avoid deleting markers that contain meaningful `value` or `note` text.
+
 ## ✅ Cases That Work Better Now
 
 - Simple sync-clip flattening
@@ -91,6 +113,39 @@ The current rule set uses both timeline range and connection point. This area is
 - Reverse retime examples from test timelines
 - Many real-world title, marker, transform, and metadata preservation cases
 
+## 🧪 Verify A Conform Prep Result
+
+Use the verifier when comparing a source timeline against the FCP-imported Conform Prep result. The best input is the XML that Final Cut Pro re-exported after import, because that shows what FCP actually accepted and kept.
+
+```zsh
+node lua/scripts/verify_conform_prep.mjs \
+  --original-xml "/path/to/original.fcpxmld" \
+  --imported-xml "/path/to/fcp-reexported-conform-prep.fcpxmld" \
+  --patched-xml "/path/to/Conform_Prep_Patched.fcpxml" \
+  --report /tmp/conform_prep_verify.txt \
+  --json /tmp/conform_prep_verify.json
+```
+
+Timeline Index CSV files are optional. Add them when you want to compare against the exact positions shown in Final Cut Pro's Timeline Index:
+
+```zsh
+  --original-index "/path/to/original-timeline-index.csv" \
+  --imported-index "/path/to/imported-timeline-index.csv"
+```
+
+The verifier checks:
+
+- title identity count after FCP import/export
+- XML-derived title timeline positions, calculated from parent clip/sync timing
+- marker identity count after FCP import/export
+- default unnamed source marker leakage, such as `Marker 1` with no note
+- remaining `sync-clip` or `mc-clip` elements
+- title offsets that are not on an edit-frame boundary
+- Timeline Index missing/added rows and position drift
+- ambiguous duplicate title groups that still need visual QA
+
+The XML-derived timeline position check is now the main placement check. Timeline Index comparison remains helpful as a UI-facing validation layer, but it is not perfect. Many real projects contain repeated companion titles with the same visible name and empty notes, so `Name + Notes` can be ambiguous. XML title identity is the stronger missing/added check, while visual QA is still required for stacking and overlap.
+
 ## ⚠️ Known Limitations
 
 Check the imported timeline carefully when working with:
@@ -100,6 +155,7 @@ Check the imported timeline carefully when working with:
 - Speed ramps that Final Cut Pro rounds differently in the UI than in FCPXML.
 - Titles spanning across multiple clips or using unusual connection points.
 - Markers created by older or unusual timeline structures.
+- Very short hold/freeze clips that leave only a one-frame live tail before or after the hold. Workaround: make the hold cover the whole visible clip range before running Conform Prep.
 
 Some cases may still drift by 1-2 frames or require a new generic rule.
 

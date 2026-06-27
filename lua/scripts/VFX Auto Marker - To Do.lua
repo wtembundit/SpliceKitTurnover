@@ -2,13 +2,15 @@
 -- Generic one-click VFX marker pipeline for SpliceKit / Final Cut Pro
 -- To Do FIXED:
 -- live phase uses STANDARD markers as visible anchors
--- XML relabel/import phase converts matched markers to TODO markers
+-- XML relabel/import phase converts matched markers to TODO markers only when
+-- optional marker rename is enabled from the Turnover UI.
 
 local CONFIG = {
     TITLE_MATCH = "VFX NAMING",
     DRY_RUN_PARSE = false,
     DRY_RUN_LIVE  = false,
     DRY_RUN_XML   = false,
+    RENAME_MARKERS = false,
     LIVE_SLEEP_SEC = 0.05,
     AUTO_IMPORT = true,
     IMPORT_INTERNAL = true,
@@ -27,7 +29,13 @@ local CONFIG = {
     MAX_REASONABLE_GAP = 3600,
     LOG_LIMIT = 120,
     TEMP_BASENAME = "splicekit_vfx_pipeline_generic_todo_fixed",
+    MARKER_KIND = "todo",
 }
+
+local function config_path()
+    local home = os.getenv("HOME") or "/tmp"
+    return home .. "/Library/Application Support/SpliceKit/plugins/com.turnover.tools/data/VFX_Auto_Marker_Config.tsv"
+end
 
 local CLIP_LIKE = {
     ["audio"] = true, ["video"] = true, ["clip"] = true, ["title"] = true,
@@ -74,6 +82,24 @@ local function read_file(path)
     local f, err = io.open(path, "rb")
     if not f then error("Cannot open file: " .. tostring(err)) end
     local s = f:read("*a"); f:close(); return s
+end
+
+local function apply_runtime_config()
+    local path = config_path()
+    local f = io.open(path, "rb")
+    if not f then return end
+    local text = f:read("*a") or ""
+    f:close()
+    for line in text:gmatch("[^\r\n]+") do
+        local key, value = line:match("^([^\t]+)\t(.*)$")
+        key = lower(trim(key or ""))
+        value = lower(trim(value or ""))
+        if key == "rename_markers" then
+            CONFIG.RENAME_MARKERS = (value == "1" or value == "true" or value == "yes")
+        elseif key == "marker_kind" and value ~= "" then
+            CONFIG.MARKER_KIND = value
+        end
+    end
 end
 local function write_file(path, content)
     local f, err = io.open(path, "wb")
@@ -182,9 +208,9 @@ local function parse_source_titles(xml)
                 stack[#stack] = nil
                 if node.tag == "title" then
                     local title_name = node.attrs.name or ""
+                    local inner = xml:sub(node.open_end + 1, s - 1)
+                    local title_text = extract_text_from_inner(inner)
                     if is_vfx_title(title_name, title_text) then
-                        local inner = xml:sub(node.open_end + 1, s - 1)
-                        local title_text = extract_text_from_inner(inner)
                         local marker_name, marker_note = derive_marker_name_and_note(title_name, title_text)
                         titles[#titles+1] = {
                             source_title_name = title_name,
@@ -323,20 +349,27 @@ local function add_project_prefix(xml)
     local patched = xml:gsub("<project%s+([^>]-)>", repl_open, 1)
     return patched, count
 end
-local function run_live_create(events)
+local function marker_action_for_kind(kind)
+    if kind == "todo" then return "addTodoMarker" end
+    if kind == "chapter" then return "addChapterMarker" end
+    return "addMarker"
+end
+
+local function run_live_create(events, kind)
     log("=== LIVE CREATE PHASE ===")
-    log("To Do fixed strategy: live anchors use addMarker, final import converts them to To Do")
+    local action = CONFIG.RENAME_MARKERS and "addMarker" or marker_action_for_kind(kind)
+    log("To Do strategy: live action=" .. tostring(action) .. (CONFIG.RENAME_MARKERS and " then XML relabel/import" or " marker anchors only"))
     local created = 0
     for i, e in ipairs(events) do
         if i <= CONFIG.LOG_LIMIT then
-            log(string.format('#%02d live t=%s name="%s" action=addMarker(final=todo)', i, fmt_seconds(e.timeline_time), e.marker_name))
+            log(string.format('#%02d live t=%s name="%s" action=%s', i, fmt_seconds(e.timeline_time), e.marker_name, action))
         end
         if not CONFIG.DRY_RUN_LIVE then
             sk.seek(e.timeline_time)
             sk.sleep(CONFIG.LIVE_SLEEP_SEC)
             pcall(function() sk.rpc("timeline.selectClipInLane", { lane = 0 }) end)
-            local res = sk.rpc("timeline.action", { action = "addMarker" })
-            if res and res.error then error("timeline.action failed: " .. tostring(res.error) .. " action=addMarker") end
+            local res = sk.rpc("timeline.action", { action = action })
+            if res and res.error then error("timeline.action failed: " .. tostring(res.error) .. " action=" .. tostring(action)) end
             sk.sleep(CONFIG.LIVE_SLEEP_SEC)
             created = created + 1
         end
@@ -456,6 +489,8 @@ local function run_xml_relabel(events)
     end
 end
 local function main()
+    apply_runtime_config()
+    local kind = CONFIG.MARKER_KIND or "todo"
     local base = tmp_base()
     local source_export_path = base .. "_source_export.fcpxml"
     export_current_fcpxml(source_export_path)
@@ -473,8 +508,12 @@ local function main()
         if sk and sk.toast then sk.toast("Parse dry run complete", 4) end
         return
     end
-    run_live_create(events)
-    run_xml_relabel(events)
+    run_live_create(events, kind)
+    if CONFIG.RENAME_MARKERS then
+        run_xml_relabel(events)
+    else
+        log("Skipping XML relabel/import; marker anchors only.")
+    end
     if CONFIG.CLEANUP_EXPORT_TRIES then delete_file(source_export_path) end
     if sk and sk.toast then sk.toast("Generic VFX To Do fixed finished", 5) end
 end

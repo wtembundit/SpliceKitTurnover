@@ -6,6 +6,9 @@ import { promisify } from "node:util";
 import { SpreadsheetFile, Workbook } from "@oai/artifact-tool";
 
 const execFile = promisify(execFileCallback);
+const THUMBNAIL_ROW_HEIGHT_PX = 135;
+const THUMBNAIL_IMAGE_WIDTH_PX = 300; // 3.12 in at 96 dpi.
+const THUMBNAIL_IMAGE_HEIGHT_PX = 169; // 1.76 in at 96 dpi.
 
 function printUsage() {
   console.log(`Usage:
@@ -198,7 +201,7 @@ async function main() {
     "VFX Number",
     "Note",
     "Timeline TC In",
-    "Duration (Frames)",
+    "Duration in Timeline (Frames)",
     "Source Filename",
     "Source TC In",
     "Source TC Out",
@@ -215,16 +218,16 @@ async function main() {
     borders: { preset: "outside", style: "thin", color: "#94A3B8" },
   };
   sheet.getRange("A2:J2").format.borders = { preset: "inside", style: "thin", color: "#94A3B8" };
-  sheet.getRange("A:A").format.columnWidthPx = 320;
-  sheet.getRange("B:B").format.columnWidthPx = 120;
-  sheet.getRange("C:C").format.columnWidthPx = 260;
-  sheet.getRange("D:D").format.columnWidthPx = 120;
-  sheet.getRange("E:E").format.columnWidthPx = 110;
-  sheet.getRange("F:F").format.columnWidthPx = 300;
-  sheet.getRange("G:G").format.columnWidthPx = 120;
-  sheet.getRange("H:H").format.columnWidthPx = 120;
-  sheet.getRange("I:I").format.columnWidthPx = 300;
-  sheet.getRange("J:J").format.columnWidthPx = 220;
+  sheet.getRange("A:A").format.columnWidthPx = 235;
+  sheet.getRange("B:B").format.columnWidthPx = 170;
+  sheet.getRange("C:C").format.columnWidthPx = 330;
+  sheet.getRange("D:D").format.columnWidthPx = 140;
+  sheet.getRange("E:E").format.columnWidthPx = 155;
+  sheet.getRange("F:F").format.columnWidthPx = 390;
+  sheet.getRange("G:G").format.columnWidthPx = 135;
+  sheet.getRange("H:H").format.columnWidthPx = 135;
+  sheet.getRange("I:I").format.columnWidthPx = 430;
+  sheet.getRange("J:J").format.columnWidthPx = 260;
 
   const dataStartRow = 3;
   const matrix = rows.map((row) => [
@@ -255,7 +258,7 @@ async function main() {
     for (let i = 0; i < rows.length; i += 1) {
       const excelRow = dataStartRow + i;
       const excelRowRange = sheet.getRange(`A${excelRow}:J${excelRow}`);
-      excelRowRange.format.rowHeightPx = 184;
+      excelRowRange.format.rowHeightPx = THUMBNAIL_ROW_HEIGHT_PX;
       if (i % 2 === 1) {
         styleCellBlock(excelRowRange, "#F8FAFC");
       }
@@ -281,7 +284,7 @@ async function main() {
           dataUrl,
           anchor: {
             from: { row: excelRow - 1, col: 0, rowOffsetPx: 6, colOffsetPx: 8 },
-            extent: { widthPx: 300, heightPx: 169 },
+            extent: { widthPx: THUMBNAIL_IMAGE_WIDTH_PX, heightPx: THUMBNAIL_IMAGE_HEIGHT_PX },
           },
         });
       } else {
@@ -323,12 +326,13 @@ async function main() {
   });
   console.log(errors.ndjson);
 
-  const previewImage = await workbook.render({
-    sheetName: "Shot List",
-    range: `A1:J${Math.max(summaryRow + 1, 6)}`,
-    scale: 1.25,
-  });
   if (args.withPreview) {
+    const previewEndRow = Math.min(summaryRow + 1, dataStartRow + 14);
+    const previewImage = await workbook.render({
+      sheetName: "Shot List",
+      range: `A1:J${Math.max(previewEndRow, 6)}`,
+      scale: 1.25,
+    });
     const previewPath = resolvedOutput.replace(/\.xlsx$/i, ".preview.png");
     await fs.writeFile(previewPath, Buffer.from(await previewImage.arrayBuffer()));
     console.log(`Saved preview: ${previewPath}`);

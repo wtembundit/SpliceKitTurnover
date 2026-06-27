@@ -7,7 +7,9 @@ INSTALL_ROOT="$HOME/Library/Application Support/SpliceKit/plugins"
 INSTALL_DIR="$INSTALL_ROOT/com.turnover.tools"
 OUT="$PLUGIN_DIR/TurnoverToolsPlugin.dylib"
 CONFORM_PLANNER_SOURCE="$REPO_ROOT/lua/scripts/build_conform_prep_fcpxml.mjs"
+CONFORM_VERIFY_SOURCE="$REPO_ROOT/lua/scripts/verify_conform_prep.mjs"
 DELIVERIES_PLANNER_SOURCE="$REPO_ROOT/lua/scripts/build_vfx_deliveries_fcpxml.mjs"
+FCPXML_DTD_VALIDATOR_SOURCE="$REPO_ROOT/lua/scripts/validate_fcpxml_dtd.mjs"
 MOTION_TEMPLATES_SOURCE="$REPO_ROOT/motion-templates/Titles.localized"
 MOTION_TEMPLATES_DEST="$HOME/Movies/Motion Templates.localized/Titles.localized"
 
@@ -72,6 +74,7 @@ clang -dynamiclib -fobjc-arc -fblocks \
   -framework Foundation \
   -framework ApplicationServices \
   -framework CoreGraphics \
+  -framework UniformTypeIdentifiers \
   "$PLUGIN_DIR/native/TurnoverToolsPlugin.m" \
   -o "$OUT"
 
@@ -90,7 +93,9 @@ cp "$PLUGIN_DIR/native/SpliceKitPluginAPI.h" "$INSTALL_DIR/native/SpliceKitPlugi
 
 mkdir -p "$INSTALL_DIR/scripts"
 cp "$CONFORM_PLANNER_SOURCE" "$INSTALL_DIR/scripts/build_conform_prep_fcpxml.mjs"
+cp "$CONFORM_VERIFY_SOURCE" "$INSTALL_DIR/scripts/verify_conform_prep.mjs"
 cp "$DELIVERIES_PLANNER_SOURCE" "$INSTALL_DIR/scripts/build_vfx_deliveries_fcpxml.mjs"
+cp "$FCPXML_DTD_VALIDATOR_SOURCE" "$INSTALL_DIR/scripts/validate_fcpxml_dtd.mjs"
 
 mkdir -p "$INSTALL_DIR/lua/scripts"
 cp "$REPO_ROOT/lua/VFX Auto Naming.lua" "$INSTALL_DIR/lua/"
@@ -100,6 +105,8 @@ cp "$REPO_ROOT/lua/VFX Shot List.lua" "$INSTALL_DIR/lua/"
 cp "$REPO_ROOT/lua/scripts/VFX Auto Marker - Standard.lua" "$INSTALL_DIR/lua/scripts/"
 cp "$REPO_ROOT/lua/scripts/VFX Auto Marker - To Do.lua" "$INSTALL_DIR/lua/scripts/"
 cp "$REPO_ROOT/lua/scripts/VFX Auto Marker - Chapter.lua" "$INSTALL_DIR/lua/scripts/"
+cp "$REPO_ROOT/lua/scripts/build_vfx_auto_marker_plan.mjs" "$INSTALL_DIR/lua/scripts/"
+cp "$REPO_ROOT/lua/scripts/build_vfx_pull_edl.mjs" "$INSTALL_DIR/lua/scripts/"
 cp "$REPO_ROOT/lua/scripts/generate_vfx_shot_list_excel.mjs" "$INSTALL_DIR/lua/scripts/"
 
 mkdir -p "$INSTALL_DIR/data"

@@ -18,8 +18,8 @@ local CONFIG = {
     FAST_MODE = true,
     SAFE_DWELL_AFTER_SEEK_SEC = 0.22,
     SAFE_DWELL_BETWEEN_MARKERS_SEC = 0.18,
-    FAST_DWELL_AFTER_SEEK_SEC = 0.04,
-    FAST_DWELL_BETWEEN_MARKERS_SEC = 0.02,
+    FAST_DWELL_AFTER_SEEK_SEC = 0.18,
+    FAST_DWELL_BETWEEN_MARKERS_SEC = 0.04,
 
     ENABLE_VIEWER_CAPTURE = true,
 
@@ -91,7 +91,29 @@ local function fmt_hms_seconds(sec)
     return string.format("%02d:%02d:%02d:%02d", hh, mm, ss, ff)
 end
 
-local function fmt_source_tc_seconds(sec, frame_duration)
+local function frames_to_tc(total_frames, fps)
+    local hh = math.floor(total_frames / (fps * 3600))
+    local rem = total_frames % (fps * 3600)
+    local mm = math.floor(rem / (fps * 60))
+    rem = rem % (fps * 60)
+    local ss = math.floor(rem / fps)
+    local ff = rem % fps
+    return string.format("%02d:%02d:%02d:%02d", hh, mm, ss, ff)
+end
+
+local function frames_to_drop_frame_tc(total_frames, fps)
+    local drop_frames = math.floor((fps * 0.0666666667) + 0.5)
+    if drop_frames <= 0 then return frames_to_tc(total_frames, fps) end
+    local frames_per_minute = (fps * 60) - drop_frames
+    local frames_per_10_minutes = (fps * 600) - (drop_frames * 9)
+    local ten_minute_chunks = math.floor(total_frames / frames_per_10_minutes)
+    local remainder = total_frames % frames_per_10_minutes
+    local extra_dropped = (drop_frames * 9 * ten_minute_chunks)
+        + (drop_frames * math.floor(math.max(0, remainder - drop_frames) / frames_per_minute))
+    return frames_to_tc(total_frames + extra_dropped, fps)
+end
+
+local function fmt_source_tc_seconds(sec, frame_duration, tc_format)
     sec = tonumber(sec) or 0
     frame_duration = tonumber(frame_duration) or (1 / 24)
     if frame_duration <= 0 then
@@ -102,13 +124,10 @@ local function fmt_source_tc_seconds(sec, frame_duration)
     if fps <= 0 then fps = 24 end
 
     local total_frames = math.floor((sec / frame_duration) + 0.000001)
-    local hh = math.floor(total_frames / (fps * 3600))
-    local rem = total_frames % (fps * 3600)
-    local mm = math.floor(rem / (fps * 60))
-    rem = rem % (fps * 60)
-    local ss = math.floor(rem / fps)
-    local ff = rem % fps
-    return string.format("%02d:%02d:%02d:%02d", hh, mm, ss, ff)
+    if trim(tc_format or "") == "DF" and (fps == 30 or fps == 60) then
+        return frames_to_drop_frame_tc(total_frames, fps)
+    end
+    return frames_to_tc(total_frames, fps)
 end
 
 local function decode_uri_component(s)
@@ -171,6 +190,61 @@ local function tsv_escape(value)
     value = value:gsub("\r", "\\r")
     value = value:gsub("\n", "\\n")
     return value
+end
+
+local function unescape_xml(s)
+    if not s then return "" end
+    return (s:gsub("&lt;", "<"):gsub("&gt;", ">"):gsub("&quot;", '"'):gsub("&apos;", "'"):gsub("&amp;", "&"))
+end
+
+local function split_nonempty_lines(s)
+    local out = {}
+    if not s then return out end
+    s = s:gsub("\226\128\168", "\n"):gsub("\r\n", "\n"):gsub("\r", "\n")
+    for line in s:gmatch("([^\n]*)\n?") do
+        line = trim(line)
+        if line ~= "" then out[#out + 1] = line end
+    end
+    return out
+end
+
+local function extract_title_text(inner)
+    local parts = {}
+    inner = inner or ""
+    for txt in inner:gmatch("<text%-style[^>]*>(.-)</text%-style>") do
+        local cleaned = trim(unescape_xml(txt))
+        if cleaned ~= "" then parts[#parts + 1] = cleaned end
+    end
+    if #parts == 0 then
+        for txt in inner:gmatch("<text[^>]*>(.-)</text>") do
+            local cleaned = trim(unescape_xml((txt:gsub("<[^>]+>", ""))))
+            if cleaned ~= "" then parts[#parts + 1] = cleaned end
+        end
+    end
+    return table.concat(parts, "\n")
+end
+
+local function is_vfx_title(title_name, title_text)
+    local lower_name = string.lower(title_name or "")
+    local lines = split_nonempty_lines(title_text)
+    local first_line = lines[1] or ""
+    if lower_name:find("vfx naming", 1, true) then return true end
+    if first_line:match("^[%u%d_%-]+_%d%d%d%d$") then return true end
+    if first_line:match("^[%u%d_%-]+_XXXX$") then return true end
+    return false
+end
+
+local function derive_vfx_title_info(title_name, title_text)
+    local lines = split_nonempty_lines(title_text)
+    local first_line = lines[1] or ""
+    local shot_code_from_name = title_name:match("^([%u%d_%-]+)%s*%-%s*VFX%s+NAMING$")
+    local vfx_number = trim(first_line) ~= "" and trim(first_line) or shot_code_from_name or trim(title_name)
+    local note_lines = {}
+    for i = 2, #lines do
+        local cleaned = trim(lines[i])
+        if cleaned ~= "" then note_lines[#note_lines + 1] = cleaned end
+    end
+    return vfx_number, table.concat(note_lines, "\n")
 end
 
 local function ensure_worker_ready(lines)
@@ -343,6 +417,12 @@ local function context_timeline_start(parent_ctx, attrs)
     if my_offset == nil then
         return parent_tl
     end
+    if parent_ctx
+        and parent_ctx.tag == "spine"
+        and trim(parent_ctx.attrs and parent_ctx.attrs.lane or "") ~= ""
+        and my_offset < (tonumber(parent_ctx.start) or 0) then
+        return parent_tl + my_offset
+    end
     local parent_start = parent_ctx and tonumber(parent_ctx.start) or 0
     return parent_tl + my_offset - parent_start
 end
@@ -356,7 +436,6 @@ end
 local function find_first_child_ref(blob)
     if not blob or blob == "" then return nil end
     local ref = blob:match("<video[^>]-ref=\"([^\"]+)\"")
-        or blob:match("<audio[^>]-ref=\"([^\"]+)\"")
         or blob:match("<asset%-clip[^>]-ref=\"([^\"]+)\"")
         or blob:match("<ref%-clip[^>]-ref=\"([^\"]+)\"")
     return ref
@@ -395,7 +474,8 @@ local function resolve_source_info(node, asset_map, body)
         asset = asset,
         source_filename = source_filename,
         source_tc_seconds = source_tc_seconds,
-        source_tc = fmt_source_tc_seconds(source_tc_seconds, asset and asset.frame_duration or nil),
+        source_tc_format = trim((node and node.attrs and (node.attrs.tcFormat or node.attrs._effective_tcFormat)) or ""),
+        source_tc = fmt_source_tc_seconds(source_tc_seconds, asset and asset.frame_duration or nil, trim((node and node.attrs and (node.attrs.tcFormat or node.attrs._effective_tcFormat)) or "")),
         source_frame_duration = asset and asset.frame_duration or (1 / 24),
         custom_metadata = custom_metadata,
     }
@@ -735,7 +815,6 @@ collect_body_details_for_range = function(node, body, asset_map, effect_map, vis
     local segments = {}
     local stack = {}
     local aggregate_effects = {}
-    local aggregate_metadata = split_metadata_items(parse_metadata_blob(body))
     local has_retime = false
     local pending_retime_keys = {}
     local pending_effects_by_source = {}
@@ -831,13 +910,9 @@ collect_body_details_for_range = function(node, body, asset_map, effect_map, vis
             source_in_seconds = source_in,
             source_out_seconds = source_out,
             source_frame_duration = source.source_frame_duration or (1 / 24),
+            source_tc_format = source.source_tc_format or "",
+            custom_metadata = source.custom_metadata or "",
         }
-        if trim(source.custom_metadata or "") ~= "" then
-            local items = split_metadata_items(source.custom_metadata)
-            for _, item in ipairs(items) do
-                aggregate_metadata[#aggregate_metadata + 1] = item
-            end
-        end
         return true
     end
 
@@ -858,11 +933,16 @@ collect_body_details_for_range = function(node, body, asset_map, effect_map, vis
             local explicit_role = trim(attrs.role or "")
             local parent_effective_role = parent and trim((parent.attrs and parent.attrs._effective_role) or parent.effective_role or "") or ""
             local effective_role = explicit_role ~= "" and explicit_role or parent_effective_role
+            local explicit_tc_format = trim(attrs.tcFormat or "")
+            local parent_effective_tc_format = parent and trim((parent.attrs and parent.attrs._effective_tcFormat) or parent.effective_tc_format or "") or ""
+            local effective_tc_format = explicit_tc_format ~= "" and explicit_tc_format or parent_effective_tc_format
             attrs._effective_role = effective_role
+            attrs._effective_tcFormat = effective_tc_format
             local child = {
                 tag = tag_name,
                 attrs = attrs,
                 effective_role = effective_role,
+                effective_tc_format = effective_tc_format,
                 timeline_start = timeline_start,
                 start = parse_fraction(attrs.start),
                 duration = parse_fraction(attrs.duration) or 0,
@@ -924,7 +1004,12 @@ collect_body_details_for_range = function(node, body, asset_map, effect_map, vis
                     last_out_seconds = segment.source_out_seconds or 0,
                     first_timeline_start = segment.timeline_start or 0,
                     source_frame_duration = segment.source_frame_duration or (1 / 24),
+                    source_tc_format = segment.source_tc_format or "",
+                    metadata_items = {},
                 }
+                for _, item in ipairs(split_metadata_items(segment.custom_metadata or "")) do
+                    group.metadata_items[#group.metadata_items + 1] = item
+                end
                 source_groups[group_key] = group
                 source_order[#source_order + 1] = group_key
             else
@@ -934,12 +1019,18 @@ collect_body_details_for_range = function(node, body, asset_map, effect_map, vis
                     if trim(segment.source_filename or "") ~= "" then
                         group.source_filename = trim(segment.source_filename or "")
                     end
+                    if trim(segment.source_tc_format or "") ~= "" then
+                        group.source_tc_format = trim(segment.source_tc_format or "")
+                    end
                 end
                 if (segment.source_in_seconds or 0) < (group.first_in_seconds or 0) then
                     group.first_in_seconds = segment.source_in_seconds or group.first_in_seconds
                 end
                 if (segment.source_out_seconds or 0) > (group.last_out_seconds or 0) then
                     group.last_out_seconds = segment.source_out_seconds or group.last_out_seconds
+                end
+                for _, item in ipairs(split_metadata_items(segment.custom_metadata or "")) do
+                    group.metadata_items[#group.metadata_items + 1] = item
                 end
             end
         end
@@ -959,19 +1050,30 @@ collect_body_details_for_range = function(node, body, asset_map, effect_map, vis
     local source_filename_lines = {}
     local source_tc_in_lines = {}
     local source_tc_out_lines = {}
+    local metadata_lines = {}
     for _, key in ipairs(source_order) do
         local group = source_groups[key]
         if group then
             local frame_duration = tonumber(group.source_frame_duration) or (1 / 24)
+            local tc_format = trim(group.source_tc_format or "")
             local inclusive_out_seconds = math.max((group.last_out_seconds or 0) - frame_duration, group.first_in_seconds or 0)
-            source_filename_lines[#source_filename_lines + 1] = trim(group.source_filename or "")
-            source_tc_in_lines[#source_tc_in_lines + 1] = fmt_source_tc_seconds(group.first_in_seconds or 0, frame_duration)
-            source_tc_out_lines[#source_tc_out_lines + 1] = fmt_source_tc_seconds(inclusive_out_seconds, frame_duration)
+            local source_filename = trim(group.source_filename or "")
+            source_filename_lines[#source_filename_lines + 1] = source_filename
+            source_tc_in_lines[#source_tc_in_lines + 1] = fmt_source_tc_seconds(group.first_in_seconds or 0, frame_duration, tc_format)
+            source_tc_out_lines[#source_tc_out_lines + 1] = fmt_source_tc_seconds(inclusive_out_seconds, frame_duration, tc_format)
+            local metadata_text = unique_join(group.metadata_items or {}, " | ")
+            if metadata_text ~= "" then
+                if #source_order > 1 and source_filename ~= "" then
+                    metadata_lines[#metadata_lines + 1] = source_filename .. ": " .. metadata_text
+                else
+                    metadata_lines[#metadata_lines + 1] = metadata_text
+                end
+            end
         end
     end
 
     local effects_text = unique_join(aggregate_effects, ", ")
-    local metadata_text = unique_join(aggregate_metadata, " | ")
+    local metadata_text = join_lines(metadata_lines)
 
     local remark_parts = {}
     if has_retime then
@@ -985,6 +1087,7 @@ collect_body_details_for_range = function(node, body, asset_map, effect_map, vis
         first_segment = first_segment,
         last_segment = last_segment,
         has_displayable_segments = (#source_order > 0),
+        source_keys = source_order,
         source_filename_text = join_lines(source_filename_lines),
         source_tc_in_text = join_lines(source_tc_in_lines),
         source_tc_out_text = join_lines(source_tc_out_lines),
@@ -1024,28 +1127,36 @@ local function collect_title_ranges(node, body)
                 stack[#stack + 1] = child
             elseif tag_name == "title" then
                 local title_name = trim(attrs.name or "")
-                local vfx_number = trim((title_name:match("^(.-)%s+%-%s+VFX NAMING$") or title_name))
-                titles[#titles + 1] = {
-                    name = title_name,
-                    vfx_number = vfx_number,
-                    timeline_start = timeline_start,
-                    duration = child.duration or 0,
-                    timeline_end = timeline_start + (child.duration or 0),
-                }
+                if is_vfx_title(title_name, "") then
+                    local vfx_number, note = derive_vfx_title_info(title_name, "")
+                    titles[#titles + 1] = {
+                        name = title_name,
+                        vfx_number = vfx_number,
+                        note = note,
+                        timeline_start = timeline_start,
+                        duration = child.duration or 0,
+                        timeline_end = timeline_start + (child.duration or 0),
+                    }
+                end
             end
         else
             local child = stack[#stack]
             if child then
                 if child.tag == "title" then
                     local title_name = trim((child.attrs and child.attrs.name) or "")
-                    local vfx_number = trim((title_name:match("^(.-)%s+%-%s+VFX NAMING$") or title_name))
-                    titles[#titles + 1] = {
-                        name = title_name,
-                        vfx_number = vfx_number,
-                        timeline_start = child.timeline_start or 0,
-                        duration = child.duration or 0,
-                        timeline_end = (child.timeline_start or 0) + (child.duration or 0),
-                    }
+                    local inner = body:sub(child.open_end, s - 1)
+                    local title_text = extract_title_text(inner)
+                    if is_vfx_title(title_name, title_text) then
+                        local vfx_number, note = derive_vfx_title_info(title_name, title_text)
+                        titles[#titles + 1] = {
+                            name = title_name,
+                            vfx_number = vfx_number,
+                            note = note,
+                            timeline_start = child.timeline_start or 0,
+                            duration = child.duration or 0,
+                            timeline_end = (child.timeline_start or 0) + (child.duration or 0),
+                        }
+                    end
                 end
                 stack[#stack] = nil
             end
@@ -1054,6 +1165,83 @@ local function collect_title_ranges(node, body)
         pos = e + 1
     end
 
+    return titles
+end
+
+local function collect_global_vfx_titles(xml)
+    local titles, stack = {}, {}
+    local pos = 1
+
+    while true do
+        local s, e, closing, tag_name, attr_str, self_close = xml:find("<(%/?)([%w:_-]+)(.-)(/?)>", pos)
+        if not s then break end
+        local is_closing = (closing == "/")
+        local is_self_closing = (self_close == "/")
+
+        if not is_closing then
+            local attrs = parse_attrs(attr_str)
+            local parent = stack[#stack]
+            local timeline_start = context_timeline_start(parent, attrs)
+            local child = {
+                tag = tag_name,
+                attrs = attrs,
+                timeline_start = timeline_start,
+                start = parse_fraction(attrs.start),
+                duration = parse_fraction(attrs.duration) or 0,
+                open_end = e + 1,
+            }
+            if child.start == nil then
+                child.start = parent and tonumber(parent.start) or 0
+            end
+
+            if not is_self_closing then
+                stack[#stack + 1] = child
+            elseif tag_name == "title" then
+                local title_name = trim(attrs.name or "")
+                if is_vfx_title(title_name, "") then
+                    local vfx_number, note = derive_vfx_title_info(title_name, "")
+                    titles[#titles + 1] = {
+                        name = title_name,
+                        vfx_number = vfx_number,
+                        note = note,
+                        timeline_start = timeline_start,
+                        duration = child.duration or 0,
+                        timeline_end = timeline_start + (child.duration or 0),
+                    }
+                end
+            end
+        else
+            local child = stack[#stack]
+            if child then
+                if child.tag == "title" then
+                    local title_name = trim((child.attrs and child.attrs.name) or "")
+                    local inner = xml:sub(child.open_end, s - 1)
+                    local title_text = extract_title_text(inner)
+                    if is_vfx_title(title_name, title_text) then
+                        local vfx_number, note = derive_vfx_title_info(title_name, title_text)
+                        titles[#titles + 1] = {
+                            name = title_name,
+                            vfx_number = vfx_number,
+                            note = note,
+                            timeline_start = child.timeline_start or 0,
+                            duration = child.duration or 0,
+                            timeline_end = (child.timeline_start or 0) + (child.duration or 0),
+                        }
+                    end
+                end
+                stack[#stack] = nil
+            end
+        end
+
+        pos = e + 1
+    end
+
+    table.sort(titles, function(a, b)
+        if a.timeline_start == b.timeline_start then
+            return (a.timeline_end or 0) < (b.timeline_end or 0)
+        end
+        return (a.timeline_start or 0) < (b.timeline_start or 0)
+    end)
     return titles
 end
 
@@ -1100,6 +1288,7 @@ local function build_segment_record(segment_node, segment_body, asset_map)
         source_in_seconds = source_in,
         source_out_seconds = source_out,
         source_frame_duration = source.source_frame_duration or (1 / 24),
+        source_tc_format = source.source_tc_format or "",
     }
 end
 
@@ -1131,6 +1320,7 @@ local function summarize_segments_for_window(segments, visible_start, visible_en
                 source_in_seconds = source_in,
                 source_out_seconds = source_out,
                 source_frame_duration = segment.source_frame_duration or (1 / 24),
+                source_tc_format = segment.source_tc_format or "",
             }
         end
     end
@@ -1162,6 +1352,7 @@ local function summarize_segments_for_window(segments, visible_start, visible_en
                     first_timeline_start = segment.timeline_start or 0,
                     last_timeline_end = segment.timeline_end or 0,
                     source_frame_duration = segment.source_frame_duration or (1 / 24),
+                    source_tc_format = segment.source_tc_format or "",
                 }
                 source_groups[group_key] = group
                 source_order[#source_order + 1] = group_key
@@ -1171,6 +1362,9 @@ local function summarize_segments_for_window(segments, visible_start, visible_en
                     group.first_in_seconds = segment.source_in_seconds or group.first_in_seconds
                     if trim(segment.source_filename or "") ~= "" then
                         group.source_filename = trim(segment.source_filename or "")
+                    end
+                    if trim(segment.source_tc_format or "") ~= "" then
+                        group.source_tc_format = trim(segment.source_tc_format or "")
                     end
                 end
                 if (segment.timeline_end or 0) > (group.last_timeline_end or 0) then
@@ -1201,10 +1395,11 @@ local function summarize_segments_for_window(segments, visible_start, visible_en
         if group then
             source_keys[#source_keys + 1] = key
             local frame_duration = tonumber(group.source_frame_duration) or (1 / 24)
+            local tc_format = trim(group.source_tc_format or "")
             local inclusive_out_seconds = math.max((group.last_out_seconds or 0) - frame_duration, group.first_in_seconds or 0)
             source_filename_lines[#source_filename_lines + 1] = trim(group.source_filename or "")
-            source_tc_in_lines[#source_tc_in_lines + 1] = fmt_source_tc_seconds(group.first_in_seconds or 0, frame_duration)
-            source_tc_out_lines[#source_tc_out_lines + 1] = fmt_source_tc_seconds(inclusive_out_seconds, frame_duration)
+            source_tc_in_lines[#source_tc_in_lines + 1] = fmt_source_tc_seconds(group.first_in_seconds or 0, frame_duration, tc_format)
+            source_tc_out_lines[#source_tc_out_lines + 1] = fmt_source_tc_seconds(inclusive_out_seconds, frame_duration, tc_format)
         end
     end
 
@@ -1236,13 +1431,22 @@ local function collect_global_source_segments(xml, asset_map)
             local explicit_role = trim(attrs.role or "")
             local parent_effective_role = parent and trim((parent.attrs and parent.attrs._effective_role) or parent.effective_role or "") or ""
             local effective_role = explicit_role ~= "" and explicit_role or parent_effective_role
+            local explicit_tc_format = trim(attrs.tcFormat or "")
+            local parent_effective_tc_format = parent and trim((parent.attrs and parent.attrs._effective_tcFormat) or parent.effective_tc_format or "") or ""
+            local effective_tc_format = explicit_tc_format ~= "" and explicit_tc_format or parent_effective_tc_format
             attrs._effective_role = effective_role
+            attrs._effective_tcFormat = effective_tc_format
 
             local node = {
                 tag = tag_name,
                 attrs = attrs,
                 effective_role = effective_role,
+                effective_tc_format = effective_tc_format,
                 is_primary_spine = (tag_name == "spine" and parent and (parent.tag == "sequence" or parent.tag == "project")),
+                inside_nested_media_container = (parent and parent.inside_nested_media_container)
+                    or tag_name == "sync-clip"
+                    or tag_name == "mc-clip"
+                    or tag_name == "audition",
                 timeline_start = timeline_start,
                 start = parse_fraction(attrs.start),
                 duration = parse_fraction(attrs.duration) or 0,
@@ -1252,7 +1456,10 @@ local function collect_global_source_segments(xml, asset_map)
                 node.start = parent and tonumber(parent.start) or 0
             end
 
-            local include_here = parent and parent.is_primary_spine and MEDIA_SEGMENT_LIKE[tag_name]
+            local include_here = parent
+                and parent.tag == "spine"
+                and not parent.inside_nested_media_container
+                and MEDIA_SEGMENT_LIKE[tag_name]
 
             if not is_self_closing then
                 stack[#stack + 1] = node
@@ -1265,8 +1472,12 @@ local function collect_global_source_segments(xml, asset_map)
         else
             local node = stack[#stack]
             if node then
+                local parent = stack[#stack - 1]
                 if node.tag ~= "title" and node.tag ~= "marker" and node.tag ~= "chapter-marker" and node.tag ~= "keyword"
-                    and stack[#stack - 1] and stack[#stack - 1].is_primary_spine and MEDIA_SEGMENT_LIKE[node.tag] then
+                    and parent
+                    and parent.tag == "spine"
+                    and not parent.inside_nested_media_container
+                    and MEDIA_SEGMENT_LIKE[node.tag] then
                     local body = xml:sub(node.open_end, s - 1)
                     local segment = build_segment_record(node, body, asset_map or {})
                     if segment then
@@ -1283,7 +1494,42 @@ local function collect_global_source_segments(xml, asset_map)
     return segments
 end
 
-local function parse_markers(xml, asset_map, effect_map, global_segments)
+local function marker_matches_title(marker_abs_time, marker_value, title)
+    local eps = 0.0005
+    if trim(marker_value or "") ~= "" and trim(title.vfx_number or "") == trim(marker_value or "") then
+        return true
+    end
+    return marker_abs_time >= ((title.timeline_start or 0) - eps)
+        and marker_abs_time <= ((title.timeline_end or title.timeline_start or 0) + eps)
+end
+
+local function choose_title_for_marker(marker_abs_time, marker_value, local_titles, global_titles)
+    local candidates = {}
+    for _, title in ipairs(local_titles or {}) do
+        if marker_matches_title(marker_abs_time, marker_value, title) then
+            candidates[#candidates + 1] = title
+        end
+    end
+    for _, title in ipairs(global_titles or {}) do
+        if marker_matches_title(marker_abs_time, marker_value, title) then
+            candidates[#candidates + 1] = title
+        end
+    end
+    if #candidates == 0 then return nil end
+    table.sort(candidates, function(a, b)
+        local amid = ((a.timeline_start or 0) + (a.timeline_end or a.timeline_start or 0)) / 2
+        local bmid = ((b.timeline_start or 0) + (b.timeline_end or b.timeline_start or 0)) / 2
+        local ad = math.abs(marker_abs_time - amid)
+        local bd = math.abs(marker_abs_time - bmid)
+        if ad == bd then
+            return ((a.duration or 0) < (b.duration or 0))
+        end
+        return ad < bd
+    end)
+    return candidates[1]
+end
+
+local function parse_markers(xml, asset_map, effect_map, global_segments, global_titles)
     local markers, stack = {}, {}
     local pos = 1
 
@@ -1336,75 +1582,80 @@ local function parse_markers(xml, asset_map, effect_map, global_segments)
                     local base_details = collect_body_details(node, body, asset_map or {}, effect_map or {})
                     for _, marker in ipairs(node.pending_markers) do
                         local marker_abs_time = node.timeline_start + (marker.rel_start - (node.start or 0))
-                        local matched_title = nil
-                        for _, title in ipairs(title_ranges) do
-                            if trim(title.vfx_number or "") == trim(marker.value or "") then
-                                matched_title = title
-                                break
-                            end
+                        local matched_title = choose_title_for_marker(marker_abs_time, marker.value, title_ranges, {})
+                        if not matched_title then
+                            matched_title = choose_title_for_marker(marker_abs_time, marker.value, {}, global_titles)
                         end
 
-                        local visible_start = matched_title and matched_title.timeline_start or node.timeline_start
-                        local visible_end = matched_title and matched_title.timeline_end or (node.timeline_start + (node.duration or 0))
-                        local details = collect_body_details_for_range(node, body, asset_map or {}, effect_map or {}, visible_start, visible_end)
-                        if not details.has_displayable_segments then
-                            details = base_details
-                        end
-                        local allowed_source_keys = {}
-                        for _, key in ipairs(details.source_keys or {}) do
-                            allowed_source_keys[key] = true
-                        end
-                        if next(allowed_source_keys) == nil and trim(source.source_filename or "") ~= "" then
-                            allowed_source_keys[canonical_source_group_key(source.ref, source.source_filename)] = true
-                        end
-                        local filtered_global_segments = {}
-                        for _, segment in ipairs(global_segments or {}) do
-                            local key = canonical_source_group_key(segment.source_key, segment.source_filename)
-                            if allowed_source_keys[key] then
-                                filtered_global_segments[#filtered_global_segments + 1] = segment
+                        if matched_title then
+                            local visible_start = matched_title.timeline_start or node.timeline_start
+                            local visible_end = matched_title.timeline_end or (node.timeline_start + (node.duration or 0))
+                            local details = collect_body_details_for_range(node, body, asset_map or {}, effect_map or {}, visible_start, visible_end)
+                            if not details.has_displayable_segments then
+                                details = base_details
                             end
-                        end
-                        local timeline_details = summarize_segments_for_window(filtered_global_segments, visible_start, visible_end)
-                        local source_details = timeline_details.has_displayable_segments and timeline_details or details
-                        local resolved_source_filename = source_details.has_displayable_segments
-                            and trim((source_details.source_filename_text ~= "" and source_details.source_filename_text) or ((source_details.first_segment and source_details.first_segment.source_filename) or source.source_filename) or "")
-                            or ""
-                        local resolved_source_tc_seconds = source_details.has_displayable_segments
-                            and ((source_details.first_segment and source_details.first_segment.source_in_seconds) or source.source_tc_seconds or 0)
-                            or 0
-                        local resolved_source_frame_duration = ((source_details.first_segment and source_details.first_segment.source_frame_duration) or source.source_frame_duration or (1 / 24))
-                        local resolved_source_tc = source_details.has_displayable_segments
-                            and trim((source_details.source_tc_in_text ~= "" and source_details.source_tc_in_text) or fmt_source_tc_seconds(((source_details.first_segment and source_details.first_segment.source_in_seconds) or source.source_tc_seconds or 0), resolved_source_frame_duration))
-                            or ""
-                        local resolved_source_tc_out_seconds = source_details.has_displayable_segments
-                            and math.max((((source_details.last_segment and source_details.last_segment.source_out_seconds) or ((source.source_tc_seconds or 0) + (node.duration or 0))) - resolved_source_frame_duration), resolved_source_tc_seconds)
-                            or 0
-                        local resolved_source_tc_out = source_details.has_displayable_segments
-                            and trim((source_details.source_tc_out_text ~= "" and source_details.source_tc_out_text) or fmt_source_tc_seconds(math.max((((source_details.last_segment and source_details.last_segment.source_out_seconds) or ((source.source_tc_seconds or 0) + (node.duration or 0))) - resolved_source_frame_duration), resolved_source_tc_seconds), resolved_source_frame_duration))
-                            or ""
-                        local eps = 0.0005
+                            local allowed_source_keys = {}
+                            for _, key in ipairs(details.source_keys or {}) do
+                                allowed_source_keys[key] = true
+                            end
+                            if next(allowed_source_keys) == nil and trim(source.source_filename or "") ~= "" then
+                                allowed_source_keys[canonical_source_group_key(source.ref, source.source_filename)] = true
+                            end
+                            local filtered_global_segments = {}
+                            for _, segment in ipairs(global_segments or {}) do
+                                local key = canonical_source_group_key(segment.source_key, segment.source_filename)
+                                if allowed_source_keys[key] then
+                                    filtered_global_segments[#filtered_global_segments + 1] = segment
+                                end
+                            end
+                            local timeline_details = summarize_segments_for_window(filtered_global_segments, visible_start, visible_end)
+                            local source_details = timeline_details.has_displayable_segments and timeline_details or details
+                            local has_source_details = source_details.has_displayable_segments
+                            local fallback_source_ok = (not has_source_details) and is_real_media_source(source) and trim(source.source_filename or "") ~= ""
+                            local resolved_source_filename = has_source_details
+                                and trim((source_details.source_filename_text ~= "" and source_details.source_filename_text) or ((source_details.first_segment and source_details.first_segment.source_filename) or source.source_filename) or "")
+                                or (fallback_source_ok and trim(source.source_filename or "") or "")
+                            local resolved_source_tc_seconds = has_source_details
+                                and ((source_details.first_segment and source_details.first_segment.source_in_seconds) or source.source_tc_seconds or 0)
+                                or (fallback_source_ok and (source.source_tc_seconds or 0) or 0)
+                            local resolved_source_frame_duration = ((source_details.first_segment and source_details.first_segment.source_frame_duration) or source.source_frame_duration or (1 / 24))
+                            local resolved_source_tc_format = trim((source_details.first_segment and source_details.first_segment.source_tc_format) or source.source_tc_format or "")
+                            local resolved_source_tc = has_source_details
+                                and trim((source_details.source_tc_in_text ~= "" and source_details.source_tc_in_text) or fmt_source_tc_seconds(((source_details.first_segment and source_details.first_segment.source_in_seconds) or source.source_tc_seconds or 0), resolved_source_frame_duration, resolved_source_tc_format))
+                                or (fallback_source_ok and fmt_source_tc_seconds(resolved_source_tc_seconds, resolved_source_frame_duration, resolved_source_tc_format) or "")
+                            local fallback_source_out_seconds = (source.source_tc_seconds or 0) + math.max((visible_end or visible_start or 0) - (visible_start or 0), 0)
+                            local resolved_source_tc_out_seconds = has_source_details
+                                and math.max((((source_details.last_segment and source_details.last_segment.source_out_seconds) or ((source.source_tc_seconds or 0) + (node.duration or 0))) - resolved_source_frame_duration), resolved_source_tc_seconds)
+                                or (fallback_source_ok and math.max(fallback_source_out_seconds - resolved_source_frame_duration, resolved_source_tc_seconds) or 0)
+                            local resolved_source_tc_out = has_source_details
+                                and trim((source_details.source_tc_out_text ~= "" and source_details.source_tc_out_text) or fmt_source_tc_seconds(math.max((((source_details.last_segment and source_details.last_segment.source_out_seconds) or ((source.source_tc_seconds or 0) + (node.duration or 0))) - resolved_source_frame_duration), resolved_source_tc_seconds), resolved_source_frame_duration, resolved_source_tc_format))
+                                or (fallback_source_ok and fmt_source_tc_seconds(resolved_source_tc_out_seconds, resolved_source_frame_duration, resolved_source_tc_format) or "")
+                            local eps = 0.0005
 
-                        if marker_abs_time >= (visible_start - eps) and marker_abs_time <= (visible_end + eps) then
-                            markers[#markers + 1] = {
-                                tag_name = marker.tag_name,
-                                value = marker.value,
-                                note = marker.note,
-                                interval_start = marker_abs_time,
-                                interval_end = marker_abs_time,
-                                timeline_in_seconds = visible_start or marker_abs_time,
-                                timeline_in_tc = fmt_hms_seconds(visible_start or marker_abs_time),
-                                parent_tag = node.tag,
-                                parent_name = trim((node.attrs and node.attrs.name) or ""),
-                                source_filename = resolved_source_filename,
-                                source_tc_seconds = resolved_source_tc_seconds,
-                                source_tc = resolved_source_tc,
-                                source_tc_out_seconds = resolved_source_tc_out_seconds,
-                                source_tc_out = resolved_source_tc_out,
-                                duration_seconds = math.max((visible_end or visible_start or 0) - (visible_start or 0), 0),
-                                duration_frames = math.floor((math.max((visible_end or visible_start or 0) - (visible_start or 0), 0) * 24) + 0.5),
-                                custom_metadata = trim((details.custom_metadata_text ~= "" and details.custom_metadata_text) or (source.custom_metadata or "")),
-                                remark = trim(details.remark or ""),
-                            }
+                            if marker_abs_time >= (visible_start - eps) and marker_abs_time <= (visible_end + eps) then
+                                markers[#markers + 1] = {
+                                    tag_name = marker.tag_name,
+                                    value = matched_title.vfx_number or marker.value,
+                                    note = matched_title.note or marker.note,
+                                    raw_marker_value = marker.value,
+                                    raw_marker_note = marker.note,
+                                    interval_start = marker_abs_time,
+                                    interval_end = marker_abs_time,
+                                    timeline_in_seconds = visible_start or marker_abs_time,
+                                    timeline_in_tc = fmt_hms_seconds(visible_start or marker_abs_time),
+                                    parent_tag = node.tag,
+                                    parent_name = trim((node.attrs and node.attrs.name) or ""),
+                                    source_filename = resolved_source_filename,
+                                    source_tc_seconds = resolved_source_tc_seconds,
+                                    source_tc = resolved_source_tc,
+                                    source_tc_out_seconds = resolved_source_tc_out_seconds,
+                                    source_tc_out = resolved_source_tc_out,
+                                    duration_seconds = math.max((visible_end or visible_start or 0) - (visible_start or 0), 0),
+                                    duration_frames = math.floor((math.max((visible_end or visible_start or 0) - (visible_start or 0), 0) * 24) + 0.5),
+                                    custom_metadata = trim((details.custom_metadata_text ~= "" and details.custom_metadata_text) or (source.custom_metadata or "")),
+                                    remark = trim(details.remark or ""),
+                                }
+                            end
                         end
                     end
                 end
@@ -1423,6 +1674,108 @@ local function parse_markers(xml, asset_map, effect_map, global_segments)
     end)
 
     return markers
+end
+
+local function merge_unique_lines(a, b)
+    local out = {}
+    local seen = {}
+    local function add_lines(value)
+        for _, line in ipairs(split_nonempty_lines(value or "")) do
+            if not seen[line] then
+                seen[line] = true
+                out[#out + 1] = line
+            end
+        end
+    end
+    add_lines(a)
+    add_lines(b)
+    return join_lines(out)
+end
+
+local function split_pipe_items(value)
+    local out = {}
+    value = trim(value or "")
+    if value == "" then return out end
+    for item in value:gmatch("[^|]+") do
+        item = trim(item)
+        if item ~= "" then out[#out + 1] = item end
+    end
+    return out
+end
+
+local function merge_unique_pipe(a, b)
+    local out = {}
+    local seen = {}
+    local function add_items(value)
+        for _, item in ipairs(split_pipe_items(value or "")) do
+            if not seen[item] then
+                seen[item] = true
+                out[#out + 1] = item
+            end
+        end
+    end
+    add_items(a)
+    add_items(b)
+    return table.concat(out, " | ")
+end
+
+local function shallow_copy_table(t)
+    local out = {}
+    for k, v in pairs(t or {}) do out[k] = v end
+    return out
+end
+
+local function dedupe_vfx_rows_by_title(markers)
+    local rows = {}
+    local by_key = {}
+    local duplicate_count = 0
+
+    for _, marker in ipairs(markers or {}) do
+        local title_start = tonumber(marker.timeline_in_seconds) or tonumber(marker.interval_start) or 0
+        local title_duration = tonumber(marker.duration_seconds) or 0
+        local key = trim(marker.value or "") .. "|" .. string.format("%.6f", title_start)
+        local existing = by_key[key]
+
+        if not existing then
+            local copy = shallow_copy_table(marker)
+            copy._capture_target = title_start + (title_duration / 2)
+            copy._capture_distance = math.abs((tonumber(copy.interval_start) or title_start) - copy._capture_target)
+            by_key[key] = copy
+            rows[#rows + 1] = copy
+        else
+            duplicate_count = duplicate_count + 1
+            local candidate_distance = math.abs((tonumber(marker.interval_start) or title_start) - (existing._capture_target or title_start))
+            if candidate_distance < (existing._capture_distance or math.huge) then
+                existing._capture_distance = candidate_distance
+                existing.source_filename = marker.source_filename
+                existing.source_tc = marker.source_tc
+                existing.source_tc_out = marker.source_tc_out
+                existing.custom_metadata = marker.custom_metadata
+                existing.remark = marker.remark
+                existing.interval_start = marker.interval_start
+                existing.interval_end = marker.interval_end
+                existing.raw_marker_value = marker.raw_marker_value
+                existing.raw_marker_note = marker.raw_marker_note
+                existing.tag_name = marker.tag_name
+            end
+        end
+    end
+
+    table.sort(rows, function(a, b)
+        local at = tonumber(a.timeline_in_seconds) or tonumber(a.interval_start) or 0
+        local bt = tonumber(b.timeline_in_seconds) or tonumber(b.interval_start) or 0
+        if at == bt then
+            return trim(a.value or "") < trim(b.value or "")
+        end
+        return at < bt
+    end)
+
+    for _, row in ipairs(rows) do
+        row._capture_target = nil
+        row._capture_distance = nil
+    end
+
+    return rows, duplicate_count
 end
 
 local function looks_like_vfx_marker(name)
@@ -1486,6 +1839,7 @@ local function build_manifest(base, project_name, rows)
         "remark",
         "project_name",
         "suggested_thumb_name",
+        "capture_seconds",
     }, "\t")
 
     for i, row in ipairs(rows) do
@@ -1503,6 +1857,7 @@ local function build_manifest(base, project_name, rows)
             tsv_escape(row.remark or ""),
             tsv_escape(project_name or ""),
             tsv_escape(row.thumb_name),
+            string.format("%.6f", row.capture_seconds or row.timeline_seconds or 0),
         }, "\t")
     end
 
@@ -1520,6 +1875,7 @@ local function main()
     local progress_path = runtime .. "/VFX_Shot_List_Progress.tsv"
     local done_path = runtime .. "/VFX_Shot_List_Done.flag"
     local report_path = runtime .. "/VFX_Shot_List_Report.txt"
+    local manifest_only_path = runtime .. "/VFX_Shot_List_Manifest_Only.flag"
     local capture_dir = desktop .. "/VFX_Shot_List_Captures_16x9"
     local thumb_dir = desktop .. "/VFX_Shot_List_Captures_Thumb"
     os.remove(progress_path)
@@ -1546,23 +1902,27 @@ local function main()
     local asset_map = parse_assets(xml, format_map)
     local effect_map = parse_effects(xml)
     local global_segments = collect_global_source_segments(xml, asset_map)
-    local markers = parse_markers(xml, asset_map, effect_map, global_segments)
-    local vfx = {}
-    for _, m in ipairs(markers) do
-        if looks_like_vfx_marker(m.value) then
-            vfx[#vfx + 1] = m
-        end
-    end
+    local global_titles = collect_global_vfx_titles(xml)
+    local vfx = parse_markers(xml, asset_map, effect_map, global_segments, global_titles)
+    local raw_vfx_count = #vfx
+    local duplicate_vfx_count = 0
+    vfx, duplicate_vfx_count = dedupe_vfx_rows_by_title(vfx)
 
-    log(lines, "VFX-like markers found: " .. tostring(#vfx))
+    log(lines, "VFX titles found: " .. tostring(#global_titles))
+    log(lines, "Matched marker anchors: " .. tostring(raw_vfx_count))
+    log(lines, "VFX rows after title dedupe: " .. tostring(#vfx) .. " (merged " .. tostring(duplicate_vfx_count) .. ")")
     if #vfx == 0 then
-        error("No VFX-like markers found.")
+        error("No marker anchors found under VFX titles. Run VFX Auto Marker first.")
     end
 
     local rows = {}
     for _, m in ipairs(vfx) do
         local marker_name = trim(m.value)
         local safe = shell_safe_name(marker_name)
+        if safe == "" then safe = "VFX" end
+        -- VFX numbers can repeat when stacked titles share the same shot number.
+        -- Prefix the row index so captures never overwrite each other.
+        local unique_safe = string.format("%03d_%s", #rows + 1, safe)
         rows[#rows + 1] = {
             marker_name = marker_name,
             marker_note = trim(m.note or ""),
@@ -1575,8 +1935,8 @@ local function main()
             source_tc_out = trim(m.source_tc_out or ""),
             custom_metadata = trim(m.custom_metadata or ""),
             remark = trim(m.remark or ""),
-            full_capture_name = safe .. ".png",
-            thumb_name = safe .. ".jpg",
+            full_capture_name = unique_safe .. ".png",
+            thumb_name = unique_safe .. ".jpg",
         }
     end
 
@@ -1585,6 +1945,14 @@ local function main()
     write_file(progress_path, table.concat({"status","index","marker_name","timeline_seconds","full_capture_name","thumb_name"}, "\t") .. "\n")
     log(lines, "Manifest written: " .. manifest_path)
     log(lines, "Progress file: " .. progress_path)
+
+    if file_exists(manifest_only_path) then
+        log(lines, "Manifest-only mode enabled; native Turnover plugin will seek/capture frames.")
+        write_file(report_path, table.concat(lines, "\n"))
+        print("[vfx-shot-list] Report: " .. report_path)
+        print("[vfx-shot-list] Manifest: " .. manifest_path)
+        return
+    end
 
     local dwell_after_seek = CONFIG.FAST_MODE and CONFIG.FAST_DWELL_AFTER_SEEK_SEC or CONFIG.SAFE_DWELL_AFTER_SEEK_SEC
     local dwell_between_markers = CONFIG.FAST_MODE and CONFIG.FAST_DWELL_BETWEEN_MARKERS_SEC or CONFIG.SAFE_DWELL_BETWEEN_MARKERS_SEC
@@ -1607,7 +1975,7 @@ local function main()
     for i, row in ipairs(rows) do
         log(lines, string.format("Marker %02d/%02d => %s @ %s", i, #rows, row.marker_name, fmt_seconds(row.capture_seconds or row.timeline_seconds)))
         sk.seek(row.capture_seconds or row.timeline_seconds)
-        sk.sleep(CONFIG.DWELL_AFTER_SEEK_SEC or 0.45)
+        sk.sleep(dwell_after_seek)
         append_file(progress_path, table.concat({
             "ready",
             tostring(i),
@@ -1638,7 +2006,7 @@ local function main()
             end
         end
 
-        sk.sleep(CONFIG.DWELL_BETWEEN_MARKERS_SEC or 0.35)
+        sk.sleep(dwell_between_markers)
     end
 
     local ok_exit = exit_play_fullscreen(lines)
@@ -1654,9 +2022,6 @@ local function main()
     write_file(report_path, table.concat(lines, "\n"))
     print("[vfx-shot-list] Report: " .. report_path)
     print("[vfx-shot-list] Manifest: " .. manifest_path)
-    if sk and sk.toast then
-        sk.toast("VFX Shot List controller finished", 5)
-    end
 end
 
 local ok, err = pcall(main)
