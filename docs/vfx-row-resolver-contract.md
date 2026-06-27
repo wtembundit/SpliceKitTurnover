@@ -61,6 +61,24 @@ Use real-project fixtures for these cases:
 - Markers that are intentionally not renamed and still read as `Marker N`.
 - Optional renamed markers whose values match the VFX number.
 - Default unnamed source markers that should be ignored by cleanup logic.
+- Direct source clips with `conform-rate`, where the source frame rate differs
+  from the project frame rate. Their marker `start` is in source-time space and
+  must not be compared 1:1 with a title center in project-time space.
+
+## Visible Marker Relabeling
+
+Final Cut Pro may export multiple marker representations at the same apparent
+timeline position, including markers inside nested media that the editor does
+not see in the Timeline Index. Relabeling must prioritize the visible editorial
+relationship:
+
+1. If a marker and its matching `VFX NAMING` title share the same direct parent,
+   treat that ownership as authoritative.
+2. Otherwise, compare ancestor-resolved absolute timeline positions.
+3. Use local marker `start` only after applying `conform-rate` or `timeMap`; do
+   not assume source time and project time have a 1:1 rate.
+4. When duplicate XML candidates remain, prefer the default visible marker that
+   FCP created for the title rather than a marker hidden in a nested container.
 
 ## Implementation Direction
 
@@ -77,4 +95,3 @@ resolveVfxRows(xml, assetMap, effectMap, options)
 ```
 
 Until the shared module exists, keep the selection logic in `VFX Shot List` and `VFX Pull EDL` intentionally mirrored.
-

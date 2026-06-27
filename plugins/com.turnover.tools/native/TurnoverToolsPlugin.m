@@ -12,12 +12,14 @@ static NSString *gPluginDataPath = nil;
 static NSPanel *gPanel = nil;
 static NSTextField *gStatusLabel = nil;
 static NSTextField *gRunLabel = nil;
+static BOOL gToolRunInProgress = NO;
 
 static void TTShowPanel(void);
 static NSDictionary *TTRunTool(NSString *toolId);
 static NSDictionary *TTRunConformPrepVerify(void);
 static NSDictionary *TTRunAutoMarker(NSString *markerKind, BOOL renameMarkers);
 static NSDictionary *TTRunLuaCompatibilityScript(NSString *scriptName);
+static NSDictionary *TTResetLuaVM(void);
 static BOOL TTFileExists(NSString *path);
 static NSString *TTTrimString(NSString *value);
 static NSDictionary *TTCaptureLargestFCPWindow(NSString *outputPath);
@@ -550,6 +552,7 @@ static NSDictionary *TTCaptureLargestFCPWindow(NSString *outputPath) {
 
     __block NSDictionary *result = nil;
     TTOnMainSync(^id{
+        @autoreleasepool {
         NSWindow *window = TTLargestVisibleFCPWindow();
         if (!window) {
             result = @{@"status": @"error", @"message": @"No visible FCP window found"};
@@ -589,6 +592,7 @@ static NSDictionary *TTCaptureLargestFCPWindow(NSString *outputPath) {
             @"window_title": window.title ?: @"",
             @"window_number": @(windowID),
         };
+        }
         return nil;
     });
 
@@ -667,7 +671,7 @@ static NSDictionary *TTStatus(void) {
 
     return @{
         @"plugin": @"Turnover",
-        @"version": @"1.1.0",
+        @"version": @"1.2.0",
         @"data_path": TTString(dataPath),
         @"screen_recording_granted": @(CGPreflightScreenCaptureAccess()),
         @"accessibility_granted": @(AXIsProcessTrusted()),
@@ -1013,7 +1017,12 @@ static NSDictionary *TTRunLuaFile(NSString *path) {
         };
     }
 
+    // SpliceKit reuses one quota-limited Lua VM for the lifetime of FCP.
+    // Reset around every standalone Turnover script so one project cannot
+    // exhaust the allocator and crash a later run while loading its chunk.
+    TTResetLuaVM();
     NSDictionary *result = TTCallRPC(@"lua.executeFile", @{@"path": path});
+    TTResetLuaVM();
     if (result[@"error"]) {
         return @{
             @"status": @"error",
@@ -1026,6 +1035,11 @@ static NSDictionary *TTRunLuaFile(NSString *path) {
         @"script_path": path,
         @"result": result
     };
+}
+
+static NSDictionary *TTResetLuaVM(void) {
+    NSDictionary *result = TTCallRPC(@"lua.reset", @{});
+    return [result isKindOfClass:NSDictionary.class] ? result : @{@"error": @"Invalid lua.reset response"};
 }
 
 static NSDictionary *TTRunLuaCompatibilityScript(NSString *scriptName) {
@@ -1576,6 +1590,7 @@ static NSDictionary *TTPostProcessShotListCaptures(NSString *captureDir, NSStrin
 
     for (NSString *item in items) {
         if (![[item.pathExtension lowercaseString] isEqualToString:@"png"]) continue;
+        @autoreleasepool {
         NSString *capturePath = [captureDir stringByAppendingPathComponent:item];
         NSString *thumbName = [[item stringByDeletingPathExtension] stringByAppendingPathExtension:@"jpg"];
         NSString *thumbPath = [thumbDir stringByAppendingPathComponent:thumbName];
@@ -1601,6 +1616,7 @@ static NSDictionary *TTPostProcessShotListCaptures(NSString *captureDir, NSStrin
         } else {
             failed++;
             [messages addObject:[NSString stringWithFormat:@"%@: %@", item, error.localizedDescription ?: @"write failed"]];
+        }
         }
     }
 
@@ -1763,6 +1779,7 @@ static NSDictionary *TTRunVFXShotList(void) {
 
     NSUInteger captured = 0;
     for (NSDictionary<NSString *, NSString *> *row in manifestRowsData) {
+        @autoreleasepool {
         NSString *index = TTTrimString(row[@"index"]);
         NSString *markerName = TTTrimString(row[@"vfx_number"]);
         NSString *fullName = TTShotListFullCaptureName(row);
@@ -1821,6 +1838,7 @@ static NSDictionary *TTRunVFXShotList(void) {
             fullName,
             thumbName], nil);
         [NSThread sleepForTimeInterval:0.04];
+        }
     }
 
     TTSendEscapeToFinalCut();
@@ -2129,20 +2147,37 @@ static NSDictionary *TTRunTool(NSString *toolId) {
 - (void)runMenuTool:(NSMenuItem *)sender {
     NSString *toolId = [sender.representedObject isKindOfClass:NSString.class] ? sender.representedObject : @"";
     NSString *label = sender.title ?: toolId;
+    @synchronized ([TTPanelController class]) {
+        if (gToolRunInProgress) {
+            TTSetRunMessage([NSString stringWithFormat:@"%@ was not started because another Turnover tool is still running.", label]);
+            return;
+        }
+        gToolRunInProgress = YES;
+    }
     TTSetRunMessage([NSString stringWithFormat:@"%@: queued...", label]);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSDictionary *result = TTRunTool(toolId);
-        NSString *status = [result[@"status"] description] ?: @"unknown";
-        NSString *message = [result[@"message"] description] ?: @"";
-        if ([status isEqualToString:@"ok"]) {
-            NSString *outputFolder = [result[@"output_folder"] isKindOfClass:NSString.class] ? result[@"output_folder"] : @"";
-            if (outputFolder.length > 0) {
-                TTSetRunMessage([NSString stringWithFormat:@"%@ complete\nOutput: %@", label, outputFolder]);
-            } else {
-                TTSetRunMessage([NSString stringWithFormat:@"%@ complete", label]);
+        @autoreleasepool {
+            @try {
+                NSDictionary *result = TTRunTool(toolId);
+                NSString *status = [result[@"status"] description] ?: @"unknown";
+                NSString *message = [result[@"message"] description] ?: @"";
+                if ([status isEqualToString:@"ok"]) {
+                    NSString *outputFolder = [result[@"output_folder"] isKindOfClass:NSString.class] ? result[@"output_folder"] : @"";
+                    if (outputFolder.length > 0) {
+                        TTSetRunMessage([NSString stringWithFormat:@"%@ complete\nOutput: %@", label, outputFolder]);
+                    } else {
+                        TTSetRunMessage([NSString stringWithFormat:@"%@ complete", label]);
+                    }
+                } else {
+                    TTSetRunMessage([NSString stringWithFormat:@"%@ failed: %@", label, message]);
+                }
+            } @catch (NSException *exception) {
+                TTSetRunMessage([NSString stringWithFormat:@"%@ failed: %@", label, exception.reason ?: exception.name]);
+            } @finally {
+                @synchronized ([TTPanelController class]) {
+                    gToolRunInProgress = NO;
+                }
             }
-        } else {
-            TTSetRunMessage([NSString stringWithFormat:@"%@ failed: %@", label, message]);
         }
     });
 }

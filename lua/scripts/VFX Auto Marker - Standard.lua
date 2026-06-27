@@ -37,6 +37,7 @@ local CONFIG = {
     EXPORT_RETRY_SLEEP_SEC = 1.0,
     MIN_EXPECTED_MARKERS = 8,
     EPSILON = 0.0005,
+    MARKER_MATCH_TOLERANCE_SEC = 0.125,
     PREFER_DEFAULT_MARKERS = true,
 
     MIN_REASONABLE_TIME = 0,
@@ -308,12 +309,14 @@ local function parse_existing_markers(xml)
             local attrs = parse_attrs(attr_str)
             local parent = stack[#stack]
             local timeline_start = context_timeline_start(parent, attrs)
+            local abs_time = resolved_abs_time(parent, attrs)
             local start_val = parse_fraction(attrs.start) or 0
             local duration_val = parse_fraction(attrs.duration) or 0
 
             local node = {
-                tag = tag_name, attrs = attrs, timeline_start = timeline_start,
+                tag = tag_name, attrs = attrs, timeline_start = timeline_start, abs_time = abs_time,
                 start = start_val, duration = duration_val, open_start = s, open_end = e,
+                vfx_marker_names = {},
             }
 
             if (tag_name == "marker" or tag_name == "chapter-marker") and parent and CLIP_LIKE[parent.tag] then
@@ -328,6 +331,8 @@ local function parse_existing_markers(xml)
                     parent_tag = parent.tag,
                     parent_timeline_start = parent.timeline_start,
                     parent_duration = parent.duration,
+                    timeline_time = parent.abs_time + (start_val - parent.start),
+                    owner_vfx_names = parent.vfx_marker_names,
                     interval_start = parent.timeline_start,
                     interval_end = parent.timeline_start + parent.duration,
                     attrs = attrs,
@@ -336,6 +341,18 @@ local function parse_existing_markers(xml)
 
             if not is_self_closing then stack[#stack+1] = node end
         else
+            local node = stack[#stack]
+            if node and node.tag == tag_name and node.tag == "title" then
+                local title_name = node.attrs.name or ""
+                local title_text = extract_text_from_inner(xml:sub(node.open_end + 1, s - 1))
+                if is_vfx_title(title_name, title_text) then
+                    local marker_name = derive_marker_name_and_note(title_name, title_text)
+                    local owner = stack[#stack - 1]
+                    if owner and marker_name and marker_name ~= "" then
+                        owner.vfx_marker_names[marker_name] = true
+                    end
+                end
+            end
             if #stack > 0 then stack[#stack] = nil end
         end
 
@@ -504,10 +521,11 @@ end
 local function choose_marker_for_event(e, markers, used)
     local best, best_score = nil, math.huge
     for i, m in ipairs(markers) do
-        if not used[i] and interval_contains(m, e.timeline_time) then
-            local mid = (m.interval_start + m.interval_end) / 2
-            local dist_mid = math.abs(e.timeline_time - mid)
-            local score = dist_mid + (m.parent_duration * 0.01)
+        local marker_time = tonumber(m.timeline_time)
+        local distance = marker_time and math.abs(e.timeline_time - marker_time) or math.huge
+        local owner_match = m.owner_vfx_names and m.owner_vfx_names[e.marker_name]
+        if not used[i] and (owner_match or distance <= CONFIG.MARKER_MATCH_TOLERANCE_SEC) then
+            local score = owner_match and (-10.0 + math.min(distance, 1.0)) or distance
             if CONFIG.PREFER_DEFAULT_MARKERS and not looks_like_default_marker(m.value) then
                 score = score + 1.0
             end

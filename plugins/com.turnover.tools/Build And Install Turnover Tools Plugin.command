@@ -68,15 +68,25 @@ fi
 
 mkdir -p "$PLUGIN_DIR/data"
 
-clang -dynamiclib -fobjc-arc -fblocks \
-  -mmacosx-version-min=13.0 \
-  -framework AppKit \
-  -framework Foundation \
-  -framework ApplicationServices \
-  -framework CoreGraphics \
-  -framework UniformTypeIdentifiers \
-  "$PLUGIN_DIR/native/TurnoverToolsPlugin.m" \
-  -o "$OUT"
+if xcrun --find clang >/dev/null 2>&1; then
+  clang -dynamiclib -fobjc-arc -fblocks \
+    -arch arm64 \
+    -arch x86_64 \
+    -mmacosx-version-min=13.0 \
+    -framework AppKit \
+    -framework Foundation \
+    -framework ApplicationServices \
+    -framework CoreGraphics \
+    -framework UniformTypeIdentifiers \
+    "$PLUGIN_DIR/native/TurnoverToolsPlugin.m" \
+    -o "$OUT"
+elif [ -f "$OUT" ]; then
+  echo "Using bundled prebuilt TurnoverToolsPlugin.dylib"
+else
+  echo "Xcode Command Line Tools are required when no prebuilt plugin is bundled."
+  echo "Install them with: xcode-select --install"
+  exit 1
+fi
 
 mkdir -p "$INSTALL_ROOT"
 rm -rf "$INSTALL_DIR"

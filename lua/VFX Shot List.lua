@@ -1915,14 +1915,24 @@ local function main()
         error("No marker anchors found under VFX titles. Run VFX Auto Marker first.")
     end
 
+    local safe_name_totals = {}
+    for _, m in ipairs(vfx) do
+        local safe = shell_safe_name(trim(m.value))
+        if safe == "" then safe = "VFX" end
+        safe_name_totals[safe] = (safe_name_totals[safe] or 0) + 1
+    end
+
+    local safe_name_occurrences = {}
     local rows = {}
     for _, m in ipairs(vfx) do
         local marker_name = trim(m.value)
         local safe = shell_safe_name(marker_name)
         if safe == "" then safe = "VFX" end
-        -- VFX numbers can repeat when stacked titles share the same shot number.
-        -- Prefix the row index so captures never overwrite each other.
-        local unique_safe = string.format("%03d_%s", #rows + 1, safe)
+        local unique_safe = safe
+        if (safe_name_totals[safe] or 0) > 1 then
+            safe_name_occurrences[safe] = (safe_name_occurrences[safe] or 0) + 1
+            unique_safe = string.format("%s_%02d", safe, safe_name_occurrences[safe])
+        end
         rows[#rows + 1] = {
             marker_name = marker_name,
             marker_note = trim(m.note or ""),

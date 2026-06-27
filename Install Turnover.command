@@ -40,8 +40,10 @@ if [ ! -f "$INSTALLER" ]; then
   exit 1
 fi
 
-if ! xcrun --find clang >/dev/null 2>&1; then
-  echo "Xcode Command Line Tools are required to build the native plugin."
+PREBUILT="$ROOT_DIR/plugins/com.turnover.tools/TurnoverToolsPlugin.dylib"
+if ! xcrun --find clang >/dev/null 2>&1 && [ ! -f "$PREBUILT" ]; then
+    echo "Xcode Command Line Tools are required to build the native plugin."
+    echo "The GitHub release bundle includes a prebuilt plugin and does not require Xcode."
   echo
   echo "Install them with:"
   echo "  xcode-select --install"

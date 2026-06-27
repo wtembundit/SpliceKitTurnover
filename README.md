@@ -16,8 +16,9 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 
 - [Turnover Tools Guide](docs/turnover-tools.md): detailed workflow descriptions and usage notes.
 - [Conform Prep Guide](docs/conform-prep.md): detailed explanation of sync-clip flattening, retime math, speed ramps, titles, markers, transforms, metadata, and known limits.
-- [VFX Row Resolver Contract](docs/vfx-row-resolver-contract.md): implementation note for keeping `VFX Shot List` and `VFX Pull EDL` aligned.
-- [Release Notes v1.1.0](docs/release-notes-v1.1.0.md): plugin migration notes and current limitations.
+- [VFX Row Resolver Contract](docs/vfx-row-resolver-contract.md): implementation note for keeping VFX tools aligned.
+- [Visible Timeline Resolver Future Plan](docs/visible-timeline-resolver-future.md): parity-first plan for sharing visible marker logic safely.
+- [Release Notes v1.2.0](docs/release-notes-v1.2.0.md): current improvements, installation, and known limitations.
 
 ## Tools
 
@@ -33,7 +34,8 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 
 - Final Cut Pro running with SpliceKit plugin support.
 - macOS 13 or later.
-- Xcode Command Line Tools, for `clang`.
+- Xcode Command Line Tools are required only when building from source. The
+  GitHub release bundle includes a prebuilt native plugin.
 - Node.js. The installer detects common Homebrew, nvm, Volta, asdf, MacPorts, and shell paths automatically. If Node.js is missing and Homebrew is available, the installer can install it for you.
 - Screen Recording permission for the patched Final Cut Pro process if you use `VFX Shot List` thumbnails.
 
@@ -71,13 +73,19 @@ Double-click:
 Install Turnover.command
 ```
 
-The installer opens Terminal, builds the native plugin, installs the bundled `VFX Naming` Motion title template, and copies the plugin to:
+The installer opens Terminal, installs the bundled native plugin and `VFX Naming`
+Motion title template, and copies the plugin to:
 
 ```text
 ~/Library/Application Support/SpliceKit/plugins/com.turnover.tools
 ```
 
 Then restart the patched Final Cut Pro.
+
+For a GitHub release download, extract `Turnover-v1.2.0.zip`, open the extracted
+folder, and double-click `Install Turnover.command`. The release bundle includes
+a prebuilt plugin, so Xcode is not required. macOS may ask for confirmation
+because the installer was downloaded from the internet.
 
 Advanced terminal install from this repository root:
 
