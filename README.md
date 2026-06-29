@@ -99,6 +99,18 @@ After restart, use the `Turnover` menu in Final Cut Pro. `Open Turnover` opens t
 
 `VFX Shot List` captures the largest visible Final Cut Pro viewer window. For the most reliable thumbnails, open the fullscreen preview window before running the tool.
 
+### Screen Recording Preflight
+
+Grant Screen Recording permission before the first capture:
+
+1. In Final Cut Pro, choose `Turnover > Open Turnover`.
+2. Click `Request Screen Recording`.
+3. Approve Final Cut Pro/SpliceKit in macOS System Settings when prompted.
+4. Quit and reopen Final Cut Pro.
+5. Open the Turnover panel again and confirm `Screen Recording: OK` before running `VFX Shot List`.
+
+Turnover may display the macOS permission request when `VFX Shot List` is run for the first time, but granting permission after capture has already started can interrupt that run. Request permission in advance and restart Final Cut Pro instead.
+
 The output is written to a desktop folder named:
 
 ```text

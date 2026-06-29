@@ -146,6 +146,16 @@ Thumbnail capture behavior:
 - For the most reliable thumbnails, open the fullscreen viewer before running the tool.
 - macOS Screen Recording permission must be granted for the patched Final Cut Pro/SpliceKit process.
 
+Screen Recording preflight:
+
+1. Choose `Turnover > Open Turnover` before running the first Shot List.
+2. Click `Request Screen Recording`.
+3. Approve Final Cut Pro/SpliceKit in macOS System Settings.
+4. Quit and reopen Final Cut Pro so macOS applies the permission cleanly.
+5. Confirm that the Turnover panel shows `Screen Recording: OK`, then run `VFX Shot List`.
+
+Turnover can trigger the permission request during the first Shot List run, but that run may already be inside the fullscreen/capture sequence. Granting permission at that point can interrupt capture, so the panel preflight is the recommended workflow.
+
 Important notes:
 
 - If Screen Recording permission is missing, thumbnails may be blank or captured from the wrong window.
