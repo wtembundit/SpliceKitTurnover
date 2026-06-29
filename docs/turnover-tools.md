@@ -28,7 +28,8 @@ What it does:
 
 Important notes:
 
-- **Preflight:** for the cleanest Conform Prep result, duplicate the timeline and remove editorial titles/markers before running. Title/marker preservation is best-effort and can create misleading import noise while debugging source flattening.
+- **Preflight:** duplicate the timeline, detach audio from the clips in that duplicate, delete the detached audio, and remove titles/markers before running. Do not perform this destructive cleanup on the master timeline.
+- Audio, title, and marker preservation can introduce import noise that obscures the source-flattening result. Validate those elements separately after clip timing and media references are confirmed.
 - Not every FCPXML shape is guaranteed yet, especially multicam and retime patterns we have not tested.
 - If a clip disappears or titles/markers drift after import, keep both the original XML and generated XML as a reproducible test case.
 

@@ -10,7 +10,7 @@ Turnover is usable for the current tested workflows, but it is still a work in p
 
 If a timeline fails or imports with missing/shifted elements, keep the original project/XML and report the smallest reproducible case so the generic rules can be improved.
 
-**Conform Prep preflight:** duplicate the timeline and clear editorial titles/markers before validating source flattening whenever possible. Title/marker preservation is best-effort; leaving them in can create misleading import-side noise while debugging the actual clip flatten.
+**Conform Prep preflight:** work on a duplicate timeline. Detach and delete audio from that duplicate, then clear titles/markers before validating source flattening whenever possible. Audio, title, and marker structures can create misleading import-side noise while debugging the actual clip flatten. Keep the original timeline unchanged.
 
 ## Documentation
 

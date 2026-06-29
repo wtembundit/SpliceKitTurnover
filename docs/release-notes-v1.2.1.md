@@ -13,7 +13,7 @@ Turnover v1.2.1 is a compatibility and onboarding update for the native SpliceKi
 
 ## Conform Prep
 
-- Fixed connected VO/editorial titles that disappeared during Final Cut Pro import after sync-clip flattening.
+- Fixed connected titles that disappeared during Final Cut Pro import after sync-clip flattening.
 - Title ownership now follows the connection point rather than requiring the entire title duration to fit inside one primary clip.
 - Titles can continue across later primary-storyline clips without being shortened or detached from their original anchor.
 

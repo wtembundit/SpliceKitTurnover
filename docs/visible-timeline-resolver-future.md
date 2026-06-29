@@ -25,7 +25,7 @@ source clips with `conform-rate`.
 
 ## Safe Migration Strategy
 
-1. Freeze the current R1/R4 and other real-project fixtures as behavioral
+1. Freeze the current anonymized Fixture A/Fixture B and other real-project fixtures as behavioral
    baselines.
 2. Extract only marker visibility and identity into a shared resolver first.
 3. Run the new resolver in shadow mode and compare it with current output.

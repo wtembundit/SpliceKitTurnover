@@ -4,11 +4,11 @@ This note captures the current working model for nested-retime `sync-clip` flatt
 
 ## Proven Scope
 
-The current model has been validated against these `clip-inside-sync` examples:
+The current model has been validated against these anonymized `clip-inside-sync` fixtures:
 
-- `A081C028_250215TP.mov`
-- `E007C029_2203130N_CANON.mov`
-- `A113C002_250301CA.mov`
+- `FORWARD_RAMP_A`
+- `FORWARD_RAMP_B`
+- `REVERSE_MULTI_BLADE_C`
 
 It is **not** yet validated for:
 
@@ -16,7 +16,7 @@ It is **not** yet validated for:
 - multicam
 - arbitrary nested compounds
 
-`SC_22_1_C16_01_A_HS` remains intentionally skipped for now.
+One nested `asset-clip-inside-sync` fixture remains intentionally skipped for now.
 
 ## Core Principle
 
@@ -104,8 +104,8 @@ For `clip-inside-sync` nested retimes:
 
 This is currently strong enough for example-driven refinement:
 
-- A081 validates forward ramp behavior
-- E007 validates different segment rates on the same inner 200% base
-- A113 validates reverse + multi-blade behavior
+- `FORWARD_RAMP_A` validates forward ramp behavior
+- `FORWARD_RAMP_B` validates different segment rates on the same inner 200% base
+- `REVERSE_MULTI_BLADE_C` validates reverse + multi-blade behavior
 
 Once those stay stable together, we can extract a more generic solver with higher confidence.

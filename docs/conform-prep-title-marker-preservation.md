@@ -6,23 +6,22 @@ This note records the practical rules learned while fixing real-world `Conform P
 
 Test timeline:
 
-- `TIGER_DC3_R4_250812 XML`
+- `PROJECT_A_LONGFORM`
 - Original Timeline Index title count: `299`
 - Imported Conform Prep title count after the fix: `299`
 - XML title identity diff: `0 missing`, `0 added`
 - Empty default source markers after the fix: `0`
 - DTD validation: passed
-- Latest import/export XML after the SC053 follow-up still contains all `299` titles.
+- Latest import/export XML after the title-anchor follow-up still contains all `299` titles.
 - Latest import/export XML has `161` meaningful markers and `0` empty default `Marker N` markers.
 
-Timeline Index CSV can still report apparent moved titles when matching by `Name + Notes` only. This is expected for repeated companion titles with empty notes, such as `CG set extension - Basic Title`, because several distinct title instances share the same visible name and note text. XML identity matching is more reliable for proving that titles are present; visual QA is still required for placement and stacking.
+Timeline Index CSV can still report apparent moved titles when matching by `Name + Notes` only. This is expected for repeated companion titles with empty notes, such as `CG description - Basic Title`, because several distinct title instances share the same visible name and note text. XML identity matching is more reliable for proving that titles are present; visual QA is still required for placement and stacking.
 
-Follow-up fix: four titles around `SC053_0020` and `SC053_0030` initially survived import but reported different Timeline Index positions and visually overlapped. The fix was to split nested-retime titles per item instead of forcing every known nested-retime title inside the flattened clip:
+Follow-up fix: four titles around two adjacent anonymized shots initially survived import but reported different Timeline Index positions and visually overlapped. The fix was to preserve each title's own connection point instead of forcing every nested-retime title to the same parent start:
 
-- titles that start before or span beyond the flattened clip window stay as spine siblings in timeline time
-- titles that fit fully inside the flattened clip are nested inside that clip in source/start time
-- titles that start inside a clip and overshoot its tail by only a few frames can still be treated as clip-local, because this is often FCP rounding around a retimed clip boundary
-- top-level sibling titles should be checked again after flattening; if a sibling title fits a nearby previous clip window, relocate it into that clip so FCP does not silently drop it on import
+- titles whose connection point starts inside the flattened clip stay attached to that clip, even when their duration continues across later primary-storyline clips
+- titles that start before the available anchor remain spine siblings in timeline time
+- top-level sibling titles should be checked again after flattening; if their connection point belongs to a nearby previous clip, relocate them into that clip so FCP does not silently drop them on import
 
 ## Title Rules That Worked
 
@@ -48,17 +47,17 @@ new title offset = sync.offset + (title.offset - sync.start)
 
 This keeps the title at the same timeline position while moving it out of the sync source-time domain.
 
-### 3. Clip-Local Titles Should Stay Inside The Flattened Clip
+### 3. Connected Titles Should Stay With Their Valid Anchor
 
-Some titles are connected to a sync clip but are effectively clip-local: after rebasing to the timeline, their title window fits entirely inside the flattened clip window.
+Some titles are connected to a sync clip and begin inside that clip, but their duration intentionally continues across later clips. The title's connection point determines ownership; its end does not need to fit inside the anchor clip.
 
-If these titles are emitted as top-level spine siblings, Final Cut Pro can still drop them during import. The robust rule is:
+If these titles are emitted as top-level spine siblings, Final Cut Pro can drop them during import. The robust rule is:
 
-- If the title fits inside the flattened clip timeline window, keep it inside the flattened clip.
+- If the title connection point is inside the flattened clip timeline window, keep it inside the flattened clip.
 - Rebase the title from `sync.start` to the flattened clip's source/start domain.
-- If the title spans beyond the clip window, keep it as a spine sibling and rebase it to timeline time.
-- If the title only exceeds the clip tail by a few frames, allow a small tail tolerance and keep it clip-local.
-- If a title becomes a top-level sibling but then fits a nearby previous clip, relocate it into that clip as a final cleanup pass.
+- Preserve the full title duration so titles can span later clips.
+- If the title starts before the available clip anchor, keep it as a spine sibling and rebase it to timeline time.
+- If a title becomes a top-level sibling but its connection point belongs to a nearby previous clip, relocate it into that clip as a final cleanup pass.
 
 This split avoids both classes of bugs:
 
@@ -91,7 +90,7 @@ Always also inspect:
 - disabled titles
 - paired VFX titles, such as a shot-code title plus a companion CG-description title
 
-Nested-retime cases can preserve title identity while still be visually wrong if every title is forced into the flattened clip. Split those titles per item: clip-local titles can be nested, but spanning titles should stay in timeline time as spine siblings.
+Nested-retime cases can preserve title identity while still be visually wrong if every title is forced to the same parent start. Preserve each title's own connection point and duration independently.
 
 ## Marker Cleanup Rule
 
@@ -139,14 +138,14 @@ However, Final Cut Pro FCPXML still needs every title to be structurally anchore
 - as a top-level spine sibling in timeline time
 - or nested inside a clip/asset-clip in that clip's source/start time
 
-The same absolute title can be valid in one structure and silently dropped in another. In this TIGER case, some titles existed in the patched XML as top-level spine siblings at the correct absolute timeline time, but FCP dropped them on import. Moving clip-local titles inside the correct flattened clip made FCP keep them.
+The same absolute title can be valid in one structure and silently dropped in another. In the anonymized long-form fixture, some titles existed in the patched XML as top-level spine siblings at the correct absolute timeline time, but FCP dropped them on import. Restoring each title to the clip containing its connection point made FCP keep them without shortening titles that span later clips.
 
 Best generic model:
 
 1. Compute each title's intended absolute timeline start/end.
 2. Decide the safest FCPXML anchor.
-3. If the title is a true cross-clip/span title, keep it as a spine sibling and write the absolute timeline offset.
-4. If the title is clip-local or only exceeds the clip tail by a few frames because of retime rounding, nest it in that clip and convert the absolute time to clip source/start time.
+3. If the title's connection point belongs to a flattened clip, nest it in that clip and convert the absolute connection time to clip source/start time; preserve the full duration even when it spans later clips.
+4. If no valid clip owns the connection point, keep it as a spine sibling and write the absolute timeline offset.
 5. After import/export, verify identity count and visually inspect titles with duplicate names, empty notes, retime, or cross-clip spans.
 
 ## Known Concerns
