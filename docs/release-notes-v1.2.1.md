@@ -8,6 +8,7 @@ Turnover v1.2.1 is a compatibility and onboarding update for the native SpliceKi
 - Added a direct download-page button when a newer Turnover release is available.
 - Replaced the Codex-only `@oai/artifact-tool` dependency with a private ExcelJS runtime installed automatically with Turnover.
 - Fixed `VFX Shot List` on user machines that do not have a Codex runtime cache.
+- Restored the approved Shot List thumbnail layout: approximately 230 px column width (`37.5` in Excel) and row height `135`.
 - Updated installation instructions to make the SpliceKit prerequisite explicit.
 - Simplified the install flow to: install SpliceKit, download Turnover, double-click the installer, and restart Final Cut Pro.
 

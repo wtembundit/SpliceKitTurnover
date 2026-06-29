@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import ExcelJS from "exceljs";
 
-const THUMBNAIL_ROW_HEIGHT_PX = 135;
+const THUMBNAIL_ROW_HEIGHT = 135;
+// ExcelJS stores character-based width with padding. 38.33 reopens as 37.5
+// in Excel, matching the approved thumbnail column (about 230 px).
+const THUMBNAIL_COLUMN_WIDTH = 38.33;
 const THUMBNAIL_IMAGE_WIDTH_PX = 300; // 3.12 in at 96 dpi.
 const THUMBNAIL_IMAGE_HEIGHT_PX = 169; // 1.76 in at 96 dpi.
 
@@ -196,8 +199,8 @@ async function main() {
     cell.font = { name: "Aptos", size: 11, bold: true, color: { argb: argb("#0F172A") } };
     cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
   });
-  [235, 170, 330, 140, 155, 390, 135, 135, 430, 260].forEach((pixels, index) => {
-    sheet.getColumn(index + 1).width = columnWidthFromPixels(pixels);
+  [THUMBNAIL_COLUMN_WIDTH, 170, 330, 140, 155, 390, 135, 135, 430, 260].forEach((width, index) => {
+    sheet.getColumn(index + 1).width = index === 0 ? width : columnWidthFromPixels(width);
   });
 
   const dataStartRow = 3;
@@ -219,7 +222,7 @@ async function main() {
       const excelRow = dataStartRow + i;
       const worksheetRow = sheet.getRow(excelRow);
       worksheetRow.values = matrix[i];
-      worksheetRow.height = THUMBNAIL_ROW_HEIGHT_PX * 0.75;
+      worksheetRow.height = THUMBNAIL_ROW_HEIGHT;
       worksheetRow.eachCell((cell) => applyCellStyle(cell, i % 2 === 1 ? "#F8FAFC" : "#FFFFFF"));
       worksheetRow.getCell(1).alignment = { vertical: "middle", horizontal: "center", wrapText: true };
       worksheetRow.getCell(2).font = { name: "Aptos", size: 11, bold: true, color: { argb: argb("#0F172A") } };
