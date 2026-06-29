@@ -23,7 +23,7 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 
 ## Tools
 
-- `Conform Prep`: flatten and prepare timelines for VFX conform.
+- `Conform Prep`: flatten and prepare timelines for online conform.
 - `VFX Auto Naming`: number `VFX NAMING` titles.
 - `VFX Reset Naming`: reset numbered VFX titles back to placeholders.
 - `VFX Auto Marker`: create standard, to-do, or chapter markers from VFX titles.
