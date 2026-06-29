@@ -1679,7 +1679,7 @@ function rebaseStoryItemXML(xml, oldBaseValue, newBaseValue) {
   return replaceAttrInXML(xml, "offset", formatTimeValue(shifted));
 }
 
-function outerTitlesFitWithinClipWindow(titleXmlItems, clipOffsetValue, clipDurationValue, tailToleranceFrames = 0n) {
+function outerTitlesCanAnchorWithinClipWindow(titleXmlItems, clipOffsetValue, clipDurationValue, tailToleranceFrames = 0n) {
   const clipOffset = parseTimeValue(clipOffsetValue || "");
   const clipDuration = parseTimeValue(clipDurationValue || "");
   if (!clipOffset || !clipDuration) return false;
@@ -1694,16 +1694,19 @@ function outerTitlesFitWithinClipWindow(titleXmlItems, clipOffsetValue, clipDura
     const offset = parseTimeValue(attrs.offset || "");
     const duration = parseTimeValue(attrs.duration || "");
     if (!offset || !duration) return false;
-    const end = addTime(offset, duration);
     if (compareTime(offset, clipOffset) < 0) return false;
-    if (compareTime(end, clipEnd) > 0) return false;
+    // A connected title is anchored by its offset, but its visible duration may
+    // legitimately continue across later primary-storyline clips. Requiring the
+    // whole title to fit inside the anchor clip turns those titles into spine
+    // siblings and Final Cut can discard them on import.
+    if (compareTime(offset, clipEnd) > 0) return false;
   }
   return true;
 }
 
-function storyItemFitsClipWindow(xml, clipOffsetValue, clipDurationValue, tailToleranceFrames = 0n) {
+function storyItemCanAnchorInClipWindow(xml, clipOffsetValue, clipDurationValue, tailToleranceFrames = 0n) {
   if (!xml || !xml.startsWith("<title")) return false;
-  return outerTitlesFitWithinClipWindow([xml], clipOffsetValue, clipDurationValue, tailToleranceFrames);
+  return outerTitlesCanAnchorWithinClipWindow([xml], clipOffsetValue, clipDurationValue, tailToleranceFrames);
 }
 
 function snapSiblingTitleOffsetToFrameBoundary(xml, fps = 24n) {
@@ -2380,7 +2383,7 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
         forceOuterTitlesInsideKnownNested
       ) && outputTag === "clip"
         ? (outerBuckets.story || []).filter((item) =>
-            storyItemFitsClipWindow(
+            storyItemCanAnchorInClipWindow(
               rebaseStoryItemXML(item, node.attrs.start, node.attrs.offset),
               attrs.offset,
               attrs.duration,
@@ -2765,7 +2768,7 @@ function relocateClipLocalSiblingTitles(xml, reportLines) {
       const candidate = elements[candidateIndex];
       if (!["clip", "asset-clip"].includes(candidate.tag)) continue;
       if (
-        storyItemFitsClipWindow(
+        storyItemCanAnchorInClipWindow(
           item.xml,
           candidate.attrs.offset,
           candidate.attrs.duration,

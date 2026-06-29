@@ -1,0 +1,12 @@
+{
+  "name": "turnover-script-runtime",
+  "private": true,
+  "version": "1.2.1",
+  "type": "module",
+  "dependencies": {
+    "exceljs": "4.4.0"
+  },
+  "overrides": {
+    "uuid": "11.1.1"
+  }
+}

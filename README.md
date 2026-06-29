@@ -2,7 +2,7 @@
 
 Native SpliceKit plugin for Final Cut Pro turnover workflows.
 
-Turnover bundles the VFX tools that used to run through the separate SpliceKit Worker app into one native plugin menu. The Worker app is no longer required.
+Turnover is an add-on for [SpliceKit](https://github.com/elliotttate/SpliceKit). It is not a standalone application and requires SpliceKit to be installed first.
 
 ## Current Status
 
@@ -18,7 +18,8 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 - [Conform Prep Guide](docs/conform-prep.md): detailed explanation of sync-clip flattening, retime math, speed ramps, titles, markers, transforms, metadata, and known limits.
 - [VFX Row Resolver Contract](docs/vfx-row-resolver-contract.md): implementation note for keeping VFX tools aligned.
 - [Visible Timeline Resolver Future Plan](docs/visible-timeline-resolver-future.md): parity-first plan for sharing visible marker logic safely.
-- [Release Notes v1.2.0](docs/release-notes-v1.2.0.md): current improvements, installation, and known limitations.
+- [Release Notes v1.2.1](docs/release-notes-v1.2.1.md): current update checker, portable Shot List runtime, and Conform Prep title-anchor fix.
+- [Release Notes v1.2.0](docs/release-notes-v1.2.0.md): previous workflow improvements and known limitations.
 
 ## Tools
 
@@ -32,7 +33,7 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 
 ## Requirements
 
-- Final Cut Pro running with SpliceKit plugin support.
+- [SpliceKit](https://github.com/elliotttate/SpliceKit) installed and working with Final Cut Pro.
 - macOS 13 or later.
 - Xcode Command Line Tools are required only when building from source. The
   GitHub release bundle includes a prebuilt native plugin.
@@ -67,25 +68,24 @@ TURNOVER_NODE_PATH=/path/to/node ./plugins/com.turnover.tools/Build\ And\ Instal
 
 ## Install
 
-Double-click:
+1. Install SpliceKit from the official [SpliceKit releases page](https://github.com/elliotttate/SpliceKit/releases/latest) and confirm its menu appears in Final Cut Pro.
+2. Download and extract the latest [Turnover release](https://github.com/wtembundit/SpliceKitTurnover/releases/latest).
+3. Double-click:
 
 ```text
 Install Turnover.command
 ```
 
-The installer opens Terminal, installs the bundled native plugin and `VFX Naming`
-Motion title template, and copies the plugin to:
+4. Let the installer configure Turnover's Node.js dependencies automatically.
+5. Restart Final Cut Pro and open the `Turnover` menu.
+
+The installer opens Terminal, installs the bundled native plugin, its private spreadsheet runtime, and the `VFX Naming` Motion title template. The plugin is copied to:
 
 ```text
 ~/Library/Application Support/SpliceKit/plugins/com.turnover.tools
 ```
 
-Then restart the patched Final Cut Pro.
-
-For a GitHub release download, extract `Turnover-v1.2.0.zip`, open the extracted
-folder, and double-click `Install Turnover.command`. The release bundle includes
-a prebuilt plugin, so Xcode is not required. macOS may ask for confirmation
-because the installer was downloaded from the internet.
+The release bundle includes a prebuilt plugin, so Xcode is not required. macOS may ask for confirmation because the installer was downloaded from the internet.
 
 Advanced terminal install from this repository root:
 
@@ -122,8 +122,3 @@ Example: entering `8` adds 8 frames at the head and 8 frames at the tail.
 - `docs/`: implementation notes and conform-prep model documentation.
 
 Build output such as `TurnoverToolsPlugin.dylib` is ignored by Git and should be regenerated locally with the install command.
-
-## Notes
-
-- The old SpliceKit Worker app, setup tools, and worker source have been removed.
-- The GitHub repository has been renamed from `SpliceKitWorker` to `SpliceKitTurnover`.

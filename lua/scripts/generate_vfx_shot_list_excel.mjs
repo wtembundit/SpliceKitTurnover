@@ -1,11 +1,8 @@
 import fs from "node:fs/promises";
-import { execFile as execFileCallback } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
-import { SpreadsheetFile, Workbook } from "@oai/artifact-tool";
+import ExcelJS from "exceljs";
 
-const execFile = promisify(execFileCallback);
 const THUMBNAIL_ROW_HEIGHT_PX = 135;
 const THUMBNAIL_IMAGE_WIDTH_PX = 300; // 3.12 in at 96 dpi.
 const THUMBNAIL_IMAGE_HEIGHT_PX = 169; // 1.76 in at 96 dpi.
@@ -37,7 +34,6 @@ function parseArgs(argv) {
     thumbs: path.join(os.homedir(), "Desktop", "VFX_Shot_List_Captures_Thumb"),
     output: "",
     title: "VFX Shot List",
-    withPreview: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -52,8 +48,6 @@ function parseArgs(argv) {
       args.output = path.resolve(argv[++i]);
     } else if (arg === "--title") {
       args.title = argv[++i];
-    } else if (arg === "--with-preview") {
-      args.withPreview = true;
     } else if (arg === "--help" || arg === "-h") {
       printUsage();
       process.exit(0);
@@ -137,33 +131,20 @@ async function pathExists(filePath) {
   }
 }
 
-async function toDataUrl(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  let inputPath = filePath;
-  let mimeType = "image/png";
-
-  if (ext === ".jpg" || ext === ".jpeg") {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "vfx-shot-list-thumb-"));
-    inputPath = path.join(tempDir, `${path.basename(filePath, ext)}.png`);
-    await execFile("sips", ["-s", "format", "png", filePath, "--out", inputPath]);
-  } else if (ext !== ".png") {
-    mimeType = "application/octet-stream";
-  }
-
-  const bytes = await fs.readFile(inputPath);
-  return `data:${mimeType};base64,${bytes.toString("base64")}`;
+function argb(hex) {
+  return `FF${String(hex).replace(/^#/, "").toUpperCase()}`;
 }
 
-function styleCellBlock(range, fill) {
-  range.format = {
-    fill,
-    font: { name: "Aptos", size: 11, color: "#1F2937" },
-    verticalAlignment: "center",
-    horizontalAlignment: "left",
-    wrapText: true,
-    borders: { preset: "inside", style: "thin", color: "#D1D5DB" },
-  };
-  range.format.borders = { preset: "outside", style: "thin", color: "#D1D5DB" };
+function applyCellStyle(cell, fill) {
+  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb(fill) } };
+  cell.font = { name: "Aptos", size: 11, color: { argb: argb("#1F2937") } };
+  cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
+  const border = { style: "thin", color: { argb: argb("#D1D5DB") } };
+  cell.border = { top: border, left: border, bottom: border, right: border };
+}
+
+function columnWidthFromPixels(pixels) {
+  return Math.max(1, (pixels - 5) / 7);
 }
 
 async function main() {
@@ -173,9 +154,12 @@ async function main() {
     (a, b) => Number(a.index || 0) - Number(b.index || 0),
   );
 
-  const workbook = Workbook.create();
-  const sheet = workbook.worksheets.add("Shot List");
-  sheet.freezePanes.freezeRows(2);
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Turnover";
+  workbook.created = new Date();
+  const sheet = workbook.addWorksheet("Shot List", {
+    views: [{ state: "frozen", ySplit: 2 }],
+  });
 
   const projectName = rows[0]?.project_name || "";
   const resolvedOutput = args.output || path.join(
@@ -187,14 +171,12 @@ async function main() {
     ? `${args.title} - ${projectName}`
     : args.title;
 
-  sheet.getRange("A1:J1").merged = true;
-  sheet.getRange("A1").values = [[titleText]];
-  sheet.getRange("A1:J1").format = {
-    fill: { type: "solid", color: "#0F172A" },
-    font: { name: "Aptos Display", size: 16, bold: true, color: "#FFFFFF" },
-    verticalAlignment: "center",
-  };
-  sheet.getRange("A1:J1").format.rowHeightPx = 30;
+  sheet.mergeCells("A1:J1");
+  sheet.getCell("A1").value = titleText;
+  sheet.getCell("A1").fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb("#0F172A") } };
+  sheet.getCell("A1").font = { name: "Aptos Display", size: 16, bold: true, color: { argb: argb("#FFFFFF") } };
+  sheet.getCell("A1").alignment = { vertical: "middle" };
+  sheet.getRow(1).height = 22.5;
 
   const headers = [
     "Thumbnail",
@@ -208,26 +190,15 @@ async function main() {
     "Metadata",
     "Remark",
   ];
-  sheet.getRange("A2:J2").values = [headers];
-  sheet.getRange("A2:J2").format = {
-    fill: { type: "solid", color: "#DCEAF7" },
-    font: { name: "Aptos", size: 11, bold: true, color: "#0F172A" },
-    verticalAlignment: "center",
-    horizontalAlignment: "center",
-    wrapText: true,
-    borders: { preset: "outside", style: "thin", color: "#94A3B8" },
-  };
-  sheet.getRange("A2:J2").format.borders = { preset: "inside", style: "thin", color: "#94A3B8" };
-  sheet.getRange("A:A").format.columnWidthPx = 235;
-  sheet.getRange("B:B").format.columnWidthPx = 170;
-  sheet.getRange("C:C").format.columnWidthPx = 330;
-  sheet.getRange("D:D").format.columnWidthPx = 140;
-  sheet.getRange("E:E").format.columnWidthPx = 155;
-  sheet.getRange("F:F").format.columnWidthPx = 390;
-  sheet.getRange("G:G").format.columnWidthPx = 135;
-  sheet.getRange("H:H").format.columnWidthPx = 135;
-  sheet.getRange("I:I").format.columnWidthPx = 430;
-  sheet.getRange("J:J").format.columnWidthPx = 260;
+  sheet.getRow(2).values = headers;
+  sheet.getRow(2).eachCell((cell) => {
+    applyCellStyle(cell, "#DCEAF7");
+    cell.font = { name: "Aptos", size: 11, bold: true, color: { argb: argb("#0F172A") } };
+    cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  });
+  [235, 170, 330, 140, 155, 390, 135, 135, 430, 260].forEach((pixels, index) => {
+    sheet.getColumn(index + 1).width = columnWidthFromPixels(pixels);
+  });
 
   const dataStartRow = 3;
   const matrix = rows.map((row) => [
@@ -244,23 +215,16 @@ async function main() {
   ]);
 
   if (matrix.length > 0) {
-    const lastRow = dataStartRow + matrix.length - 1;
-    const dataRange = sheet.getRange(`A${dataStartRow}:J${lastRow}`);
-    dataRange.values = matrix;
-    styleCellBlock(dataRange, "#FFFFFF");
-    sheet.getRange(`A${dataStartRow}:A${lastRow}`).format.horizontalAlignment = "center";
-    sheet.getRange(`B${dataStartRow}:B${lastRow}`).format.font = { bold: true, color: "#0F172A" };
-    sheet.getRange(`D${dataStartRow}:E${lastRow}`).format.horizontalAlignment = "center";
-    sheet.getRange(`D${dataStartRow}:E${lastRow}`).format.verticalAlignment = "center";
-    sheet.getRange(`G${dataStartRow}:H${lastRow}`).format.horizontalAlignment = "center";
-    sheet.getRange(`G${dataStartRow}:H${lastRow}`).format.verticalAlignment = "center";
-
     for (let i = 0; i < rows.length; i += 1) {
       const excelRow = dataStartRow + i;
-      const excelRowRange = sheet.getRange(`A${excelRow}:J${excelRow}`);
-      excelRowRange.format.rowHeightPx = THUMBNAIL_ROW_HEIGHT_PX;
-      if (i % 2 === 1) {
-        styleCellBlock(excelRowRange, "#F8FAFC");
+      const worksheetRow = sheet.getRow(excelRow);
+      worksheetRow.values = matrix[i];
+      worksheetRow.height = THUMBNAIL_ROW_HEIGHT_PX * 0.75;
+      worksheetRow.eachCell((cell) => applyCellStyle(cell, i % 2 === 1 ? "#F8FAFC" : "#FFFFFF"));
+      worksheetRow.getCell(1).alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+      worksheetRow.getCell(2).font = { name: "Aptos", size: 11, bold: true, color: { argb: argb("#0F172A") } };
+      for (const column of [4, 5, 7, 8]) {
+        worksheetRow.getCell(column).alignment = { vertical: "middle", horizontal: "center", wrapText: true };
       }
 
       const thumbName = rows[i].suggested_thumb_name || rows[i].thumb_name || "";
@@ -279,68 +243,39 @@ async function main() {
         : (capturePath && (await pathExists(capturePath)) ? capturePath : "");
 
       if (imagePath) {
-        const dataUrl = await toDataUrl(imagePath);
-        sheet.images.add({
-          dataUrl,
-          anchor: {
-            from: { row: excelRow - 1, col: 0, rowOffsetPx: 6, colOffsetPx: 8 },
-            extent: { widthPx: THUMBNAIL_IMAGE_WIDTH_PX, heightPx: THUMBNAIL_IMAGE_HEIGHT_PX },
-          },
+        const extension = /\.png$/i.test(imagePath) ? "png" : "jpeg";
+        const imageId = workbook.addImage({
+          buffer: await fs.readFile(imagePath),
+          extension,
+        });
+        sheet.addImage(imageId, {
+          tl: { col: 0.08, row: excelRow - 1 + 0.04 },
+          ext: { width: THUMBNAIL_IMAGE_WIDTH_PX, height: THUMBNAIL_IMAGE_HEIGHT_PX },
         });
       } else {
-        sheet.getRange(`A${excelRow}`).values = [["Missing thumb"]];
-        sheet.getRange(`A${excelRow}`).format.font = { italic: true, color: "#991B1B" };
+        worksheetRow.getCell(1).value = "Missing thumb";
+        worksheetRow.getCell(1).font = { name: "Aptos", size: 11, italic: true, color: { argb: argb("#991B1B") } };
       }
     }
   }
 
   const summaryRow = dataStartRow + rows.length + 1;
-  sheet.getRange(`A${summaryRow}:J${summaryRow + 1}`).format = {
-    fill: { type: "solid", color: "#F8FAFC" },
-    font: { name: "Aptos", size: 10, color: "#475569" },
-    wrapText: true,
-  };
-  sheet.getRange(`A${summaryRow}`).values = [["Source Manifest"]];
-  sheet.getRange(`B${summaryRow}:J${summaryRow}`).merged = true;
-  sheet.getRange(`B${summaryRow}`).values = [[args.manifest]];
-  sheet.getRange(`A${summaryRow + 1}`).values = [["Capture Folders"]];
-  sheet.getRange(`B${summaryRow + 1}:J${summaryRow + 1}`).merged = true;
-  sheet.getRange(`B${summaryRow + 1}`).values = [[`${args.captures} | ${args.thumbs}`]];
-
-  const inspectEndRow = Math.min(dataStartRow + Math.max(rows.length - 1, 0), dataStartRow + 9);
-  const inspectRange = `Shot List!A1:J${Math.max(inspectEndRow, 4)}`;
-  const preview = await workbook.inspect({
-    kind: "table",
-    range: inspectRange,
-    include: "values,formulas",
-    tableMaxRows: 12,
-    tableMaxCols: 10,
-  });
-  console.log(preview.ndjson);
-
-  const errors = await workbook.inspect({
-    kind: "match",
-    searchTerm: "#REF!|#DIV/0!|#VALUE!|#NAME\\?|#N/A",
-    options: { useRegex: true, maxResults: 50 },
-    summary: "formula scan",
-  });
-  console.log(errors.ndjson);
-
-  if (args.withPreview) {
-    const previewEndRow = Math.min(summaryRow + 1, dataStartRow + 14);
-    const previewImage = await workbook.render({
-      sheetName: "Shot List",
-      range: `A1:J${Math.max(previewEndRow, 6)}`,
-      scale: 1.25,
+  sheet.getCell(`A${summaryRow}`).value = "Source Manifest";
+  sheet.mergeCells(`B${summaryRow}:J${summaryRow}`);
+  sheet.getCell(`B${summaryRow}`).value = args.manifest;
+  sheet.getCell(`A${summaryRow + 1}`).value = "Capture Folders";
+  sheet.mergeCells(`B${summaryRow + 1}:J${summaryRow + 1}`);
+  sheet.getCell(`B${summaryRow + 1}`).value = `${args.captures} | ${args.thumbs}`;
+  for (let row = summaryRow; row <= summaryRow + 1; row += 1) {
+    sheet.getRow(row).eachCell((cell) => {
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: argb("#F8FAFC") } };
+      cell.font = { name: "Aptos", size: 10, color: { argb: argb("#475569") } };
+      cell.alignment = { wrapText: true };
     });
-    const previewPath = resolvedOutput.replace(/\.xlsx$/i, ".preview.png");
-    await fs.writeFile(previewPath, Buffer.from(await previewImage.arrayBuffer()));
-    console.log(`Saved preview: ${previewPath}`);
   }
 
   await fs.mkdir(path.dirname(resolvedOutput), { recursive: true });
-  const exported = await SpreadsheetFile.exportXlsx(workbook);
-  await exported.save(resolvedOutput);
+  await workbook.xlsx.writeFile(resolvedOutput);
 
   console.log(`Saved workbook: ${resolvedOutput}`);
 }

@@ -13,6 +13,11 @@ static NSPanel *gPanel = nil;
 static NSTextField *gStatusLabel = nil;
 static NSTextField *gRunLabel = nil;
 static BOOL gToolRunInProgress = NO;
+static BOOL gDidAutoCheckForUpdates = NO;
+static NSString *gUpdateStatusText = @"Not checked";
+static NSString * const TTTurnoverVersion = @"1.2.1";
+static NSString * const TTLatestReleaseAPI = @"https://api.github.com/repos/wtembundit/SpliceKitTurnover/releases/latest";
+static NSString * const TTLatestReleaseURL = @"https://github.com/wtembundit/SpliceKitTurnover/releases/latest";
 
 static void TTShowPanel(void);
 static NSDictionary *TTRunTool(NSString *toolId);
@@ -24,6 +29,41 @@ static BOOL TTFileExists(NSString *path);
 static NSString *TTTrimString(NSString *value);
 static NSDictionary *TTCaptureLargestFCPWindow(NSString *outputPath);
 static NSArray<NSDictionary<NSString *, NSString *> *> *TTReadShotListManifestRows(NSString *path);
+
+static NSComparisonResult TTCompareVersions(NSString *left, NSString *right) {
+    NSString *a = [[left ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"vV"]] copy];
+    NSString *b = [[right ?: @"" stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"vV"]] copy];
+    return [a compare:b options:NSNumericSearch];
+}
+
+static NSDictionary *TTLatestReleaseInfo(void) {
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:TTLatestReleaseAPI]
+                                                           cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                       timeoutInterval:10.0];
+    [request setValue:@"SpliceKitTurnover" forHTTPHeaderField:@"User-Agent"];
+    __block NSError *error = nil;
+    __block NSData *data = nil;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request
+                                                                completionHandler:^(NSData *responseData, __unused NSURLResponse *response, NSError *responseError) {
+        data = responseData;
+        error = responseError;
+        dispatch_semaphore_signal(done);
+    }];
+    [task resume];
+    dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 11 * NSEC_PER_SEC));
+    if (task.state == NSURLSessionTaskStateRunning) [task cancel];
+    if (!data) return @{ @"status": @"error", @"message": error.localizedDescription ?: @"Could not check for updates" };
+    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
+    if (![json isKindOfClass:NSDictionary.class]) {
+        return @{ @"status": @"error", @"message": error.localizedDescription ?: @"Invalid update response" };
+    }
+    NSString *tag = [json[@"tag_name"] isKindOfClass:NSString.class] ? json[@"tag_name"] : @"";
+    NSString *url = [json[@"html_url"] isKindOfClass:NSString.class] ? json[@"html_url"] : TTLatestReleaseURL;
+    if (tag.length == 0) return @{ @"status": @"error", @"message": @"Latest release has no version tag" };
+    BOOL available = TTCompareVersions(TTTurnoverVersion, tag) == NSOrderedAscending;
+    return @{ @"status": @"ok", @"tag": tag, @"url": url, @"update_available": @(available) };
+}
 
 static NSString *TTString(NSString *value) {
     return value ?: @"";
@@ -671,7 +711,7 @@ static NSDictionary *TTStatus(void) {
 
     return @{
         @"plugin": @"Turnover",
-        @"version": @"1.2.0",
+        @"version": TTTurnoverVersion,
         @"data_path": TTString(dataPath),
         @"screen_recording_granted": @(CGPreflightScreenCaptureAccess()),
         @"accessibility_granted": @(AXIsProcessTrusted()),
@@ -690,6 +730,7 @@ static NSString *TTStatusText(void) {
     [lines addObject:[NSString stringWithFormat:@"Accessibility: %@", [status[@"accessibility_granted"] boolValue] ? @"OK" : @"Needs permission"]];
     [lines addObject:[NSString stringWithFormat:@"Node.js: %@", [status[@"node_available"] boolValue] ? status[@"node_path"] : @"Not found"]];
     [lines addObject:[NSString stringWithFormat:@"VFX Naming Motion title: %@", [status[@"motion_title_installed"] boolValue] ? @"Installed" : @"Missing"]];
+    [lines addObject:[NSString stringWithFormat:@"Updates: %@", gUpdateStatusText ?: @"Not checked"]];
     [lines addObject:[NSString stringWithFormat:@"Data: %@", status[@"data_path"]]];
     return [lines componentsJoinedByString:@"\n"];
 }
@@ -1278,28 +1319,6 @@ static NSDictionary *TTRunVFXPullEDL(void) {
     };
 }
 
-static BOOL TTEnsureArtifactToolLink(NSString **message) {
-    NSString *scriptDir = [[TTPluginRootPath() stringByAppendingPathComponent:@"lua"] stringByAppendingPathComponent:@"scripts"];
-    NSString *linkPath = [[scriptDir stringByAppendingPathComponent:@"node_modules/@oai"] stringByAppendingPathComponent:@"artifact-tool"];
-    NSString *targetPath = [[[[NSHomeDirectory() stringByAppendingPathComponent:@".cache/codex-runtimes/codex-primary-runtime/dependencies/node"]
-        stringByAppendingPathComponent:@"node_modules"]
-        stringByAppendingPathComponent:@"@oai"]
-        stringByAppendingPathComponent:@"artifact-tool"].stringByStandardizingPath;
-
-    if (TTFileExists(linkPath)) return YES;
-    if (!TTFileExists(targetPath)) {
-        if (message) *message = [NSString stringWithFormat:@"Missing @oai/artifact-tool runtime: %@", targetPath];
-        return NO;
-    }
-
-    NSString *parent = [linkPath stringByDeletingLastPathComponent];
-    [[NSFileManager defaultManager] createDirectoryAtPath:parent withIntermediateDirectories:YES attributes:nil error:nil];
-    NSError *error = nil;
-    BOOL ok = [[NSFileManager defaultManager] createSymbolicLinkAtPath:linkPath withDestinationPath:targetPath error:&error];
-    if (!ok && message) *message = error.localizedDescription ?: @"Could not link artifact-tool";
-    return ok;
-}
-
 static NSURL *TTNewestWorkbookURL(void) {
     NSArray<NSURL *> *candidates = [[NSFileManager defaultManager] contentsOfDirectoryAtURL:[NSURL fileURLWithPath:TTDesktopPath()]
                                                                 includingPropertiesForKeys:@[NSURLContentModificationDateKey]
@@ -1640,11 +1659,6 @@ static NSDictionary *TTGenerateShotListExcel(NSString *manifestPath, NSString *c
     if (!TTFileExists(generatorPath)) {
         return @{@"status": @"error", @"message": [NSString stringWithFormat:@"Missing generator: %@", generatorPath]};
     }
-    NSString *artifactMessage = nil;
-    if (!TTEnsureArtifactToolLink(&artifactMessage)) {
-        return @{@"status": @"error", @"message": artifactMessage ?: @"Missing artifact-tool runtime"};
-    }
-
     NSDictionary *result = TTRunProcess(nodePath, @[
         generatorPath,
         @"--manifest", manifestPath ?: @"",
@@ -2083,6 +2097,43 @@ static NSDictionary *TTRunTool(NSString *toolId) {
     gStatusLabel.stringValue = TTStatusText();
 }
 
+- (void)checkForUpdates:(id)sender {
+    BOOL showResult = sender != nil;
+    gUpdateStatusText = @"Checking...";
+    [self refresh:nil];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSDictionary *result = TTLatestReleaseInfo();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            BOOL ok = [result[@"status"] isEqual:@"ok"];
+            BOOL available = [result[@"update_available"] boolValue];
+            NSString *tag = [result[@"tag"] description] ?: @"";
+            if (!ok) {
+                gUpdateStatusText = @"Check failed";
+            } else if (available) {
+                gUpdateStatusText = [NSString stringWithFormat:@"%@ available", tag];
+            } else {
+                gUpdateStatusText = @"Up to date";
+            }
+            [self refresh:nil];
+
+            if (available || showResult) {
+                NSAlert *alert = [[NSAlert alloc] init];
+                alert.messageText = available ? @"Turnover update available" : (ok ? @"Turnover is up to date" : @"Update check failed");
+                alert.informativeText = available
+                    ? [NSString stringWithFormat:@"Turnover %@ is available. You are using %@.", tag, TTTurnoverVersion]
+                    : (ok ? [NSString stringWithFormat:@"You are using the latest version (%@).", TTTurnoverVersion] : ([result[@"message"] description] ?: @"Could not reach GitHub Releases."));
+                if (available) [alert addButtonWithTitle:@"Open Download Page"];
+                [alert addButtonWithTitle:@"OK"];
+                NSModalResponse response = [alert runModal];
+                if (available && response == NSAlertFirstButtonReturn) {
+                    NSString *releaseURL = [result[@"url"] description] ?: TTLatestReleaseURL;
+                    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:releaseURL]];
+                }
+            }
+        });
+    });
+}
+
 - (void)requestScreenRecording:(__unused id)sender {
     CGRequestScreenCaptureAccess();
     [self refresh:nil];
@@ -2240,6 +2291,7 @@ static void TTShowPanel(void) {
         NSStackView *verifyButtons = [[NSStackView alloc] init];
         verifyButtons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
         verifyButtons.spacing = 8;
+        [verifyButtons addArrangedSubview:TTButton(@"Check for Updates", @selector(checkForUpdates:))];
         [verifyButtons addArrangedSubview:TTButton(@"Verify Conform Prep", @selector(runConformPrepVerify:))];
         [verifyButtons addArrangedSubview:TTButton(@"Generate VFX Shot List", @selector(runRecoverVFXShotList:))];
         [root addArrangedSubview:verifyButtons];
@@ -2263,6 +2315,10 @@ static void TTShowPanel(void) {
     gStatusLabel.stringValue = TTStatusText();
     [gPanel makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+    if (!gDidAutoCheckForUpdates) {
+        gDidAutoCheckForUpdates = YES;
+        [gController checkForUpdates:nil];
+    }
 }
 
 static NSMenu *TTFindOrCreateMenu(NSString *title) {

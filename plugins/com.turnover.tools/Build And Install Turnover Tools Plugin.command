@@ -118,6 +118,24 @@ cp "$REPO_ROOT/lua/scripts/VFX Auto Marker - Chapter.lua" "$INSTALL_DIR/lua/scri
 cp "$REPO_ROOT/lua/scripts/build_vfx_auto_marker_plan.mjs" "$INSTALL_DIR/lua/scripts/"
 cp "$REPO_ROOT/lua/scripts/build_vfx_pull_edl.mjs" "$INSTALL_DIR/lua/scripts/"
 cp "$REPO_ROOT/lua/scripts/generate_vfx_shot_list_excel.mjs" "$INSTALL_DIR/lua/scripts/"
+cp "$REPO_ROOT/lua/scripts/package.json" "$INSTALL_DIR/lua/scripts/"
+cp "$REPO_ROOT/lua/scripts/package-lock.json" "$INSTALL_DIR/lua/scripts/"
+
+if [ -n "$NODE_PATH_FOUND" ]; then
+  NPM_PATH="${NODE_PATH_FOUND:h}/npm"
+  if [ ! -x "$NPM_PATH" ]; then
+    NPM_PATH="$(command -v npm 2>/dev/null || true)"
+  fi
+  if [ -z "$NPM_PATH" ] || [ ! -x "$NPM_PATH" ]; then
+    echo "npm was not found next to Node.js. Install the current Node.js LTS package, then rerun this installer."
+    exit 1
+  fi
+  echo "Installing Turnover spreadsheet runtime..."
+  (
+    cd "$INSTALL_DIR/lua/scripts"
+    "$NPM_PATH" ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error
+  )
+fi
 
 mkdir -p "$INSTALL_DIR/data"
 if [ -n "$NODE_PATH_FOUND" ]; then

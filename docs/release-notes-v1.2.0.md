@@ -7,7 +7,6 @@ and fixes validated against real Final Cut Pro projects.
 
 - Added a double-click `Install Turnover.command` installer and a prebuilt
   release plugin, so users do not need Xcode Command Line Tools.
-- Removed the external Worker app from the active workflow.
 - Added automatic Node.js discovery for Homebrew, nvm, Volta, asdf, MacPorts,
   common system paths, and shell environments.
 - Added centralized Lua VM reset around every Turnover Lua script to prevent
@@ -75,7 +74,7 @@ and fixes validated against real Final Cut Pro projects.
 5. Open the `Turnover` menu.
 
 The installer builds and installs the native plugin and bundled Motion title
-template. The separate Worker app is not required.
+template.
 
 ## ⚠️ Known Limitations
 
