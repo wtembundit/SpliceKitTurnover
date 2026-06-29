@@ -26,6 +26,12 @@ Turnover v1.2.1 is a compatibility and onboarding update for the native SpliceKi
 
 Turnover is a SpliceKit plugin and cannot run as a standalone application.
 
+### VFX Shot List permission preflight
+
+Before the first Shot List capture, open `Turnover > Open Turnover`, click `Request Screen Recording`, approve Final Cut Pro/SpliceKit in macOS System Settings, and restart Final Cut Pro. Confirm that the panel shows `Screen Recording: OK` before running `VFX Shot List`.
+
+Do not wait for the permission prompt during the first capture run. Granting Screen Recording permission after the fullscreen/capture sequence has started can interrupt that run.
+
 ## Known Limitations
 
 Turnover remains under active development. Keep the original project or FCPXML when testing complex nested retimes, unusual one-frame holds, connected editorial elements, or unsupported multicam structures.
