@@ -18,7 +18,8 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 - [Conform Prep Guide](docs/conform-prep.md): detailed explanation of sync-clip flattening, retime math, speed ramps, titles, markers, transforms, metadata, and known limits.
 - [VFX Row Resolver Contract](docs/vfx-row-resolver-contract.md): implementation note for keeping VFX tools aligned.
 - [Visible Timeline Resolver Future Plan](docs/visible-timeline-resolver-future.md): parity-first plan for sharing visible marker logic safely.
-- [Release Notes v1.2.1](docs/release-notes-v1.2.1.md): current update checker, portable Shot List runtime, and Conform Prep title-anchor fix.
+- [Release Notes v1.2.2](docs/release-notes-v1.2.2.md): current Conform Prep title-anchor and spatial-conform regression fix.
+- [Release Notes v1.2.1](docs/release-notes-v1.2.1.md): update checker, portable Shot List runtime, and thumbnail layout improvements.
 - [Release Notes v1.2.0](docs/release-notes-v1.2.0.md): previous workflow improvements and known limitations.
 
 ## Tools

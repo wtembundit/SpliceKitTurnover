@@ -1,7 +1,7 @@
 {
   "id": "com.turnover.tools",
   "name": "Turnover",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "VFX and turnover workflow tools for Final Cut Pro.",
   "author": "Turnover",
   "apiVersion": 1,

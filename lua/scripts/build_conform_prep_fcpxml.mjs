@@ -1679,14 +1679,11 @@ function rebaseStoryItemXML(xml, oldBaseValue, newBaseValue) {
   return replaceAttrInXML(xml, "offset", formatTimeValue(shifted));
 }
 
-function outerTitlesCanAnchorWithinClipWindow(titleXmlItems, clipOffsetValue, clipDurationValue, tailToleranceFrames = 0n) {
+function outerTitlesCanAnchorWithinClipWindow(titleXmlItems, clipOffsetValue, clipDurationValue) {
   const clipOffset = parseTimeValue(clipOffsetValue || "");
   const clipDuration = parseTimeValue(clipDurationValue || "");
   if (!clipOffset || !clipDuration) return false;
-  const clipEnd = addTime(
-    addTime(clipOffset, clipDuration),
-    { num: BigInt(tailToleranceFrames), den: 24n }
-  );
+  const clipEnd = addTime(clipOffset, clipDuration);
   for (const xml of titleXmlItems || []) {
     const open = xml.match(/^<title\b([^>]*)>/);
     if (!open) return false;
@@ -1699,14 +1696,16 @@ function outerTitlesCanAnchorWithinClipWindow(titleXmlItems, clipOffsetValue, cl
     // legitimately continue across later primary-storyline clips. Requiring the
     // whole title to fit inside the anchor clip turns those titles into spine
     // siblings and Final Cut can discard them on import.
-    if (compareTime(offset, clipEnd) > 0) return false;
+    // Timeline ranges are half-open. An item starting exactly at clipEnd belongs
+    // to the following storyline item, not to this clip.
+    if (compareTime(offset, clipEnd) >= 0) return false;
   }
   return true;
 }
 
-function storyItemCanAnchorInClipWindow(xml, clipOffsetValue, clipDurationValue, tailToleranceFrames = 0n) {
+function storyItemCanAnchorInClipWindow(xml, clipOffsetValue, clipDurationValue) {
   if (!xml || !xml.startsWith("<title")) return false;
-  return outerTitlesCanAnchorWithinClipWindow([xml], clipOffsetValue, clipDurationValue, tailToleranceFrames);
+  return outerTitlesCanAnchorWithinClipWindow([xml], clipOffsetValue, clipDurationValue);
 }
 
 function snapSiblingTitleOffsetToFrameBoundary(xml, fps = 24n) {
@@ -2386,8 +2385,7 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
             storyItemCanAnchorInClipWindow(
               rebaseStoryItemXML(item, node.attrs.start, node.attrs.offset),
               attrs.offset,
-              attrs.duration,
-              6n
+              attrs.duration
             )
           )
         : [];
@@ -2762,6 +2760,9 @@ function relocateClipLocalSiblingTitles(xml, reportLines) {
   for (let index = 0; index < elements.length; index += 1) {
     const item = elements[index];
     if (item.tag !== "title") continue;
+    // A lane-less title is a primary spine item. Moving it inside a clip makes
+    // FCP split the clip's video around the title and can change conform scope.
+    if (!trim(item.attrs.lane)) continue;
 
     let targetIndex = -1;
     for (let candidateIndex = index - 1; candidateIndex >= 0; candidateIndex -= 1) {
@@ -2771,8 +2772,7 @@ function relocateClipLocalSiblingTitles(xml, reportLines) {
         storyItemCanAnchorInClipWindow(
           item.xml,
           candidate.attrs.offset,
-          candidate.attrs.duration,
-          6n
+          candidate.attrs.duration
         )
       ) {
         targetIndex = candidateIndex;
