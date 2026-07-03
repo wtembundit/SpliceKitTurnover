@@ -7,6 +7,39 @@ import crypto from "node:crypto";
 
 const execFile = promisify(execFileCallback);
 
+async function validateGeneratedFCPXML(xmlPath, xml) {
+  try {
+    await execFile("xmllint", ["--noout", xmlPath]);
+  } catch (error) {
+    throw new Error(`Generated FCPXML is not well formed: ${trim(error?.stderr || error?.message)}`);
+  }
+
+  const version = trim(/<fcpxml\s+version="([^"]+)"/.exec(xml)?.[1]);
+  if (!version) return;
+  const dtdPath = `/Applications/Final Cut Pro.app/Contents/Frameworks/Interchange.framework/Versions/A/Resources/FCPXMLv${version.replace(/\./g, "_")}.dtd`;
+  try {
+    await fs.access(dtdPath);
+  } catch {
+    return;
+  }
+  try {
+    const validationPath = `${xmlPath}.validate.fcpxml`;
+    const dtdURL = `file://${dtdPath.replace(/ /g, "%20")}`;
+    const doctype = `<!DOCTYPE fcpxml SYSTEM "${dtdURL}">`;
+    const validationXML = /<!DOCTYPE\s+fcpxml(?:\s+SYSTEM\s+"[^"]*")?\s*>/.test(xml)
+      ? xml.replace(/<!DOCTYPE\s+fcpxml(?:\s+SYSTEM\s+"[^"]*")?\s*>/, doctype)
+      : xml.replace(/<fcpxml\b/, `${doctype}\n<fcpxml`);
+    await fs.writeFile(validationPath, validationXML, "utf8");
+    try {
+      await execFile("xmllint", ["--noout", "--loaddtd", "--valid", validationPath]);
+    } finally {
+      await fs.rm(validationPath, { force: true });
+    }
+  } catch (error) {
+    throw new Error(`Generated FCPXML failed DTD ${version}: ${trim(error?.stderr || error?.message)}`);
+  }
+}
+
 function printUsage() {
   console.log(`Usage:
   node lua/scripts/build_vfx_deliveries_fcpxml.mjs \\
@@ -433,6 +466,21 @@ function insertIntoEvent(xml, eventInsertXml) {
   return `${xml.slice(0, insertAt)}\n${eventInsertXml}\n${xml.slice(insertAt)}`;
 }
 
+function ensureEventContainer(xml, eventName) {
+  if (/<event\b[^>]*>/.test(xml)) return xml;
+  const projectMatch = xml.match(/([ \t]*)<project\b[\s\S]*?<\/project>/);
+  if (!projectMatch || projectMatch.index == null) {
+    throw new Error("Could not create the VFX Deliveries Event because no project was found.");
+  }
+  const indent = projectMatch[1];
+  const eventXml = [
+    `${indent}<event name="${xmlEscape(eventName)}">`,
+    projectMatch[0],
+    `${indent}</event>`,
+  ].join("\n");
+  return `${xml.slice(0, projectMatch.index)}${eventXml}${xml.slice(projectMatch.index + projectMatch[0].length)}`;
+}
+
 function insertConnectedClipsIntoParents(xml, placements) {
   const ordered = [...placements]
     .filter((item) => item?.insertBefore != null && item?.clipXml)
@@ -644,7 +692,7 @@ async function main() {
     eventBrowserItems.push([
       `  <asset-clip ref="${assetId}" name="${xmlEscape(clipName)}" start="${formatSeconds(assetBaselineStart + trimStartSeconds)}" duration="${formatSeconds(sourceDuration)}" format="${xmlEscape(sequence.formatId)}" tcFormat="${xmlEscape(sequence.tcFormat)}" videoRole="VFX">`,
       `    <note>${xmlEscape(buildClipNote({ batchName, placementMode, fileName: candidate.fileName }))}</note>`,
-      `    <keyword start="0s" duration="${formatSeconds(sourceDuration)}" value="${xmlEscape(batchName)}"/>`,
+      `    <keyword start="0s" duration="${formatSeconds(sourceDuration)}" value="VFX Deliveries"/>`,
       `  </asset-clip>`,
     ].join("\n"));
 
@@ -785,19 +833,24 @@ async function main() {
     finalPlacements = adjustPlacementsForRemovedRanges(finalPlacements, removalRanges);
     patched = removeRanges(patched, removalRanges);
   }
-  patched = applyTargetEventName(patched, report.targetEventName);
-  patched = applyVersionedProjectName(patched, "📦 VFX Deliveries", existingProjectNames);
-  patched = applyFreshProjectUID(patched);
   if (assetBlocks.length > 0) {
     patched = insertConnectedClipsIntoParents(patched, finalPlacements);
     patched = insertIntoResources(patched, assetBlocks);
   }
 
   if (eventBrowserItems.length > 0) {
+    patched = ensureEventContainer(patched, report.targetEventName);
     patched = insertIntoEvent(patched, eventBrowserItems.join("\n"));
   }
 
+  // All placement offsets refer to the original XML. Rename variable-length
+  // attributes only after every offset-based structural edit is complete.
+  patched = applyTargetEventName(patched, report.targetEventName);
+  patched = applyVersionedProjectName(patched, "📦 VFX Deliveries", existingProjectNames);
+  patched = applyFreshProjectUID(patched);
+
   await fs.writeFile(args.outputXml, patched, "utf8");
+  await validateGeneratedFCPXML(args.outputXml, patched);
 
   const reportText = [
     `VFX Deliveries`,

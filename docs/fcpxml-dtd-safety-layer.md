@@ -85,20 +85,11 @@ These rules should become shared utilities where possible:
 - Keep `metadata` last inside DTD-sensitive clip-like elements.
 - Normalize duplicate `text-style-def` IDs.
 
-## Known Hold/Freeze Edge Case
+## Hold/Freeze Segmentation
 
-Conform Prep handles normal hold/freeze sections and longer clips with hold tails in current testing.
+Conform Prep handles normal hold/freeze sections and longer clips with hold tails. Final Cut Pro rejects some flattened single-clip `timeMap` structures when a one-frame live segment transitions immediately into a hold.
 
-Known remaining edge case:
-
-- A very short clip with a one-frame live tail followed by a hold/freeze section may not flatten perfectly.
-
-User workaround:
-
-- Make the hold cover the whole visible clip range before running Conform Prep.
-- Avoid leaving a one-frame non-hold tail at the head or tail of the held clip.
-
-This is intentionally documented instead of aggressively patched because the timeMap shape is unusual and further changes could affect retime cases that already pass.
+For this shape, Conform Prep emits two adjacent clips: one normal one-frame segment followed by one pure-hold segment. This preserves the visible frame sequence and total timeline duration, but increases the structural clip count by one. Verification should treat this reported split as expected retime segmentation rather than an added or duplicated shot.
 
 ## External Reference
 
@@ -118,4 +109,3 @@ Notable design ideas:
 - Large FCPXML sample test suite.
 
 Turnover does not need to migrate all at once, but the long-term direction should be a shared FCPXML safety layer rather than script-local string patching.
-

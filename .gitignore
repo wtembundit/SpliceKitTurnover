@@ -6,6 +6,8 @@
 # Local runtime/cache noise
 lua/scripts/node_modules/
 plugins/**/data/
+standalone/**/build/
+release/
 
 # macOS / editor noise
 *.swp

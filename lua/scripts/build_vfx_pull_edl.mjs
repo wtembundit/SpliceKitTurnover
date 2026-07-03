@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 
 const CONFIG = {
   markerPrefixPattern: /^[A-Z0-9_]+_\d{4}$/,
@@ -529,6 +530,24 @@ function mergeSourceDetails(...detailsList) {
   return { hasDisplayableSegments: merged.length > 0, groups: merged };
 }
 
+function removeForeignBoundarySlivers(details, preferredDetails, timelineFrameDuration) {
+  if (!details?.hasDisplayableSegments
+      || !preferredDetails?.hasDisplayableSegments
+      || !preferredDetails?.usedContainerTimeMapFallback) return details;
+  const preferredKeys = new Set((preferredDetails.groups || [])
+    .map((group) => canonicalSourceGroupKey(group.sourceKey, group.sourceFilename))
+    .filter(Boolean));
+  if (preferredKeys.size === 0) return details;
+  const frameDuration = Number(timelineFrameDuration) || CONFIG.defaultFrameDuration;
+  const groups = (details.groups || []).filter((group) => {
+    const key = canonicalSourceGroupKey(group.sourceKey, group.sourceFilename);
+    if (preferredKeys.has(key)) return true;
+    const duration = Math.abs((Number(group.lastOutSeconds) || 0) - (Number(group.firstInSeconds) || 0));
+    return duration > (frameDuration * 1.01);
+  });
+  return { hasDisplayableSegments: groups.length > 0, groups };
+}
+
 function summarizeSegmentsForWindow(segments, visibleStart, visibleEnd) {
   const clipped = [];
   for (const segment of segments || []) {
@@ -580,6 +599,9 @@ function summarizeSegmentsForWindow(segments, visibleStart, visibleEnd) {
         if (trim(segment.sourcePath)) group.sourcePath = trim(segment.sourcePath);
         if (trim(segment.sourceTcFormat)) group.sourceTcFormat = trim(segment.sourceTcFormat);
       }
+      if ((segment.sourceInSeconds || 0) < (group.firstInSeconds || 0)) {
+        group.firstInSeconds = segment.sourceInSeconds;
+      }
       if ((segment.sourceOutSeconds || 0) > (group.lastOutSeconds || 0)) group.lastOutSeconds = segment.sourceOutSeconds;
     }
   }
@@ -594,11 +616,8 @@ function summarizeSegmentsForWindow(segments, visibleStart, visibleEnd) {
 }
 
 function markerMatchesTitle(markerAbsTime, markerValue, title) {
-  const eps = 0.0005;
-  if (trim(markerValue) && trim(title?.vfxNumber) === trim(markerValue)) return true;
-  const start = Number(title?.timelineStart) || 0;
-  const end = Number(title?.timelineEnd ?? title?.timelineStart) || start;
-  return markerAbsTime >= (start - eps) && markerAbsTime <= (end + eps);
+  if (!CONFIG.markerPrefixPattern.test(trim(markerValue))) return false;
+  return trim(title?.vfxNumber) === trim(markerValue);
 }
 
 function chooseTitleForMarker(markerAbsTime, markerValue, localTitles, globalTitles) {
@@ -658,8 +677,12 @@ function dedupeRowsByTitle(rows) {
 function collectBodyDetailsForRange(node, body = "", assetMap, visibleStartOverride = null, visibleEndOverride = null) {
   const segments = [];
   const stack = [];
+  let usedContainerTimeMapFallback = false;
   const bodyVisibleStart = visibleStartOverride ?? node?.timelineStart ?? 0;
   const bodyVisibleEnd = visibleEndOverride ?? (bodyVisibleStart + (Number(node?.duration) || 0));
+  const containerTimeMap = ["sync-clip", "clip", "asset-clip", "ref-clip"].includes(trim(node?.tag).toLowerCase())
+    ? parseTimeMapBounds(body)
+    : null;
   const addSegmentFromNode = (segmentNode, segmentBody = "") => {
     const source = resolveSourceInfo(segmentNode, assetMap, segmentBody);
     const tag = trim(segmentNode?.tag).toLowerCase();
@@ -669,11 +692,36 @@ function collectBodyDetailsForRange(node, body = "", assetMap, visibleStartOverr
     if (directMediaChildUsesNonVideoRole(segmentBody)) return;
     const segmentTimelineStart = Number(segmentNode.timelineStart) || 0;
     const segmentTimelineEnd = segmentTimelineStart + (Number(segmentNode.duration) || 0);
-    const overlapStart = Math.max(segmentTimelineStart, bodyVisibleStart);
-    const overlapEnd = Math.min(segmentTimelineEnd, bodyVisibleEnd);
+    let overlapStart = Math.max(segmentTimelineStart, bodyVisibleStart);
+    let overlapEnd = Math.min(segmentTimelineEnd, bodyVisibleEnd);
+    let overlapInDelta = overlapStart - segmentTimelineStart;
+    let overlapOutDelta = overlapEnd - segmentTimelineStart;
+
+    // A retimed container maps its visible outer window into the nested
+    // storyline's clock. Child offsets cannot be compared to outer timeline
+    // coordinates directly (common with retimed sync clips).
+    if (overlapEnd <= overlapStart && containerTimeMap && segmentNode !== node) {
+      const outerStart = (Number(node?.start) || 0) + (bodyVisibleStart - (Number(node?.timelineStart) || 0));
+      const outerEnd = (Number(node?.start) || 0) + (bodyVisibleEnd - (Number(node?.timelineStart) || 0));
+      const mappedA = interpolateTimeMapSource(containerTimeMap, outerStart);
+      const mappedB = interpolateTimeMapSource(containerTimeMap, outerEnd);
+      if (mappedA != null && mappedB != null) {
+        const nestedVisibleStart = Math.min(mappedA, mappedB);
+        const nestedVisibleEnd = Math.max(mappedA, mappedB);
+        const childOffset = parseFraction(segmentNode?.attrs?.offset) ?? segmentTimelineStart;
+        const childEnd = childOffset + (Number(segmentNode.duration) || 0);
+        const nestedOverlapStart = Math.max(childOffset, nestedVisibleStart);
+        const nestedOverlapEnd = Math.min(childEnd, nestedVisibleEnd);
+        if (nestedOverlapEnd > nestedOverlapStart) {
+          usedContainerTimeMapFallback = true;
+          overlapStart = bodyVisibleStart;
+          overlapEnd = bodyVisibleEnd;
+          overlapInDelta = nestedOverlapStart - childOffset;
+          overlapOutDelta = nestedOverlapEnd - childOffset;
+        }
+      }
+    }
     if (overlapEnd <= overlapStart) return;
-    const overlapInDelta = overlapStart - segmentTimelineStart;
-    const overlapOutDelta = overlapEnd - segmentTimelineStart;
     const localSourceInTime = (segmentNode.start ?? source.sourceTcSeconds ?? 0) + overlapInDelta;
     const localSourceOutTime = (segmentNode.start ?? source.sourceTcSeconds ?? 0) + overlapOutDelta;
     let sourceIn = source.sourceTcSeconds || 0;
@@ -771,10 +819,14 @@ function collectBodyDetailsForRange(node, body = "", assetMap, visibleStartOverr
     if ((ga?.firstTimelineStart || 0) === (gb?.firstTimelineStart || 0)) return String(ga?.sourceFilename || a).localeCompare(String(gb?.sourceFilename || b));
     return (ga?.firstTimelineStart || 0) - (gb?.firstTimelineStart || 0);
   });
-  return { hasDisplayableSegments: sourceOrder.length > 0, groups: sourceOrder.map((key) => sourceGroups[key]).filter(Boolean) };
+  return {
+    hasDisplayableSegments: sourceOrder.length > 0,
+    groups: sourceOrder.map((key) => sourceGroups[key]).filter(Boolean),
+    usedContainerTimeMapFallback,
+  };
 }
 
-function collectPullRows(xml, assetMap, timelineFrameDuration, handleFrames) {
+function collectPullRows(xml, assetMap, timelineFrameDuration, handleFrames, options = {}) {
   const rows = [];
   const pushRowsFromDetails = (targetRows, vfxNumber, note, details, rowMeta = {}) => {
     let layerIndex = 0;
@@ -815,6 +867,9 @@ function collectPullRows(xml, assetMap, timelineFrameDuration, handleFrames) {
   const globalSegments = collectGlobalSourceSegments(xml, assetMap);
   const globalTitles = collectGlobalVfxTitles(xml);
 
+  // Markers provide a stable temporal anchor for titles inside nested and
+  // connected structures. The standalone app can generate these anchors in a
+  // private XML copy, so users do not need markers in their working timeline.
   const tagRegex = /<(\/?)([\w:_-]+)(.*?)(\/?)>/gs;
   let match;
   while ((match = tagRegex.exec(xml))) {
@@ -855,12 +910,34 @@ function collectPullRows(xml, assetMap, timelineFrameDuration, handleFrames) {
           const allowedKeys = new Set((details.groups || []).map((group) => canonicalSourceGroupKey(group.sourceKey, group.sourceFilename)).filter(Boolean));
           const filteredGlobalSegments = globalSegments.filter((segment) => allowedKeys.has(canonicalSourceGroupKey(segment.sourceKey, segment.sourceFilename)));
           const timelineDetails = summarizeSegmentsForWindow(filteredGlobalSegments, visibleStart, visibleEnd);
-          const titleLayerDetails = summarizeSegmentsForWindow(globalSegments, visibleStart, visibleEnd);
-          const sourceDetailsForRows = mergeSourceDetails(
-            titleLayerDetails,
-            timelineDetails.hasDisplayableSegments ? timelineDetails : null,
-            details,
-          );
+          let sourceDetailsForRows;
+          if (options.markerScoped === true) {
+            // A Shot List describes the exact frame captured at the marker,
+            // not every edit crossed by the full naming-title duration.
+            const halfFrame = (Number(timelineFrameDuration) || CONFIG.defaultFrameDuration) / 2;
+            const markerDetails = summarizeSegmentsForWindow(
+              globalSegments,
+              markerAbsTime - halfFrame,
+              markerAbsTime + halfFrame,
+            );
+            sourceDetailsForRows = markerDetails.hasDisplayableSegments ? markerDetails : details;
+          } else if (options.ownerScoped === true) {
+            // Shot List follows the visible marker owner, matching the original
+            // SpliceKit workflow. Do not absorb unrelated clips merely because
+            // they overlap the VFX title elsewhere in the timeline hierarchy.
+            sourceDetailsForRows = timelineDetails.hasDisplayableSegments ? timelineDetails : details;
+          } else {
+            const titleLayerDetails = removeForeignBoundarySlivers(
+              summarizeSegmentsForWindow(globalSegments, visibleStart, visibleEnd),
+              details,
+              timelineFrameDuration,
+            );
+            sourceDetailsForRows = mergeSourceDetails(
+              titleLayerDetails,
+              timelineDetails.hasDisplayableSegments ? timelineDetails : null,
+              details,
+            );
+          }
           pushRowsFromDetails(rows, trim(matchedTitle.vfxNumber), trim(matchedTitle.note || marker.note), sourceDetailsForRows, {
             titleStartSeconds: Number(matchedTitle.timelineStart) || visibleStart,
             titleDurationSeconds: Number(matchedTitle.duration) || Math.max(visibleEnd - visibleStart, 0),
@@ -913,7 +990,14 @@ function secondsToTC(seconds, frameDuration, tcFormat = "") {
 }
 
 function edlSafeName(value, maxLen) {
-  let text = trim(value).replace(/\s+/g, "_").replace(/[^\w.-]/g, "_");
+  let text = trim(value)
+    .replace(/^🎞\s*Conform Prep(?:\s+v\d+(?:\.\d+)*)?\s*-\s*/u, "")
+    .replace(/^[\p{Extended_Pictographic}\p{Emoji_Presentation}\uFE0F\s]+/gu, "")
+    .replace(/\s+/g, "_")
+    .replace(/[^\w.-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^[_\s.-]+|[_\s.-]+$/g, "");
+  if (!text) text = "Project";
   if (maxLen && text.length > maxLen) text = text.slice(0, maxLen);
   return text;
 }
@@ -1032,7 +1116,17 @@ async function main() {
   console.log(JSON.stringify({ status: "ok", rows: rows.length, edl_path: edlPath, tsv_path: tsvPath, report_path: args.report }));
 }
 
-main().catch((error) => {
-  console.error(error.stack || String(error));
-  process.exit(1);
-});
+export {
+  collectPullRows,
+  parseAssets,
+  parseFormats,
+  parseSequenceFrameDuration,
+  secondsToTC,
+};
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error.stack || String(error));
+    process.exit(1);
+  });
+}

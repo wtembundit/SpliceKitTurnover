@@ -82,6 +82,15 @@ Conform Prep reads the outer and inner `timeMap` structures and attempts to buil
 - the real multiplied speed values
 - a segment count close to the original, without inventing extra compensation blades when avoidable
 
+### One-Frame Live Segment Before A Hold
+
+Final Cut Pro can reject a flattened single-clip `timeMap` when a one-frame live segment transitions immediately into a hold. Conform Prep represents this case as two adjacent source clips:
+
+1. one normal-speed clip containing the live frame
+2. one pure-hold clip containing the remaining held frames
+
+The visible frames, timeline position, total duration, effects, and metadata remain equivalent to the source timeline. The Timeline Index clip count increases by one for each occurrence because one retimed container is represented by two source segments. This is expected retime segmentation, not duplicated media or extra timeline duration.
+
 ## 🧩 What We Mean By Checkpoints
 
 During development, checkpoints were inspected through Final Cut Pro's source timecode display to confirm whether key frames matched. In normal use, the user does not manually enter checkpoints.
@@ -165,7 +174,7 @@ Check the imported timeline carefully when working with:
 - Speed ramps that Final Cut Pro rounds differently in the UI than in FCPXML.
 - Titles spanning across multiple clips or using unusual connection points.
 - Markers created by older or unusual timeline structures.
-- Very short hold/freeze clips that leave only a one-frame live tail before or after the hold. Workaround: make the hold cover the whole visible clip range before running Conform Prep.
+- A one-frame live segment followed by a hold is preserved by splitting the flattened result into two adjacent clips. Expect the structural clip count to increase by one for each occurrence.
 
 Some cases may still drift by 1-2 frames or require a new generic rule.
 

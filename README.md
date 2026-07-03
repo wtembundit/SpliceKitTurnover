@@ -1,8 +1,15 @@
 # Turnover
 
-Native SpliceKit plugin for Final Cut Pro turnover workflows.
+Final Cut Pro turnover workflows available as a standalone macOS app and a native SpliceKit plugin.
 
-Turnover is an add-on for [SpliceKit](https://github.com/elliotttate/SpliceKit). It is not a standalone application and requires SpliceKit to be installed first.
+Both editions share the same FCPXML planning core. The standalone app does not require SpliceKit; the plugin edition requires [SpliceKit](https://github.com/elliotttate/SpliceKit).
+
+## Choose An Edition
+
+- **Turnover Standalone**: drag/drop FCPXML or a Final Cut Pro project into a compact native macOS app. VFX Shot List thumbnails are extracted from a reference movie.
+- **Turnover for SpliceKit**: run tools from inside Final Cut Pro. VFX Shot List can drive and capture the Final Cut Pro viewer.
+
+Download both editions from the same [Turnover release page](https://github.com/wtembundit/SpliceKitTurnover/releases/latest). Their version numbers are intentionally synchronized.
 
 ## Current Status
 
@@ -18,6 +25,8 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 - [Conform Prep Guide](docs/conform-prep.md): detailed explanation of sync-clip flattening, retime math, speed ramps, titles, markers, transforms, metadata, and known limits.
 - [VFX Row Resolver Contract](docs/vfx-row-resolver-contract.md): implementation note for keeping VFX tools aligned.
 - [Visible Timeline Resolver Future Plan](docs/visible-timeline-resolver-future.md): parity-first plan for sharing visible marker logic safely.
+- [Standalone Guide](standalone/TurnoverApp/README.md): standalone installation, input methods, Shot List reference-movie workflow, cache, and limitations.
+- [Release Notes v1.3.0](docs/release-notes-v1.3.0.md): standalone application and synchronized dual-edition release.
 - [Release Notes v1.2.2](docs/release-notes-v1.2.2.md): current Conform Prep title-anchor and spatial-conform regression fix.
 - [Release Notes v1.2.1](docs/release-notes-v1.2.1.md): update checker, portable Shot List runtime, and thumbnail layout improvements.
 - [Release Notes v1.2.0](docs/release-notes-v1.2.0.md): previous workflow improvements and known limitations.
@@ -32,7 +41,7 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 - `VFX Pull EDL`: build a source pull EDL with per-side handle frames.
 - `VFX Timeline`: place returned VFX renders back into the timeline.
 
-## Requirements
+## SpliceKit Plugin Requirements
 
 - [SpliceKit](https://github.com/elliotttate/SpliceKit) installed and working with Final Cut Pro.
 - macOS 13 or later.
@@ -67,7 +76,7 @@ If Node.js is installed in a custom location, run the installer with:
 TURNOVER_NODE_PATH=/path/to/node ./plugins/com.turnover.tools/Build\ And\ Install\ Turnover\ Tools\ Plugin.command
 ```
 
-## Install
+## Install The SpliceKit Plugin
 
 1. Install SpliceKit from the official [SpliceKit releases page](https://github.com/elliotttate/SpliceKit/releases/latest) and confirm its menu appears in Final Cut Pro.
 2. Download and extract the latest [Turnover release](https://github.com/wtembundit/SpliceKitTurnover/releases/latest).

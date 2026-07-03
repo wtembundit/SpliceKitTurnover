@@ -106,6 +106,20 @@ function collectAssetInfo(xml) {
   return assets;
 }
 
+function collectFormatFrameDurations(xml) {
+  const formats = new Map();
+  for (const match of xml.matchAll(/<format\s+([^>]*?)\/?\s*>/g)) {
+    const attrs = parseAttrs(match[1] ?? "");
+    const frameDuration = parseTimeValue(attrs.frameDuration || "");
+    if (attrs.id && frameDuration) formats.set(attrs.id, frameDuration);
+  }
+  const sequenceFormat = parseAttrs(xml.match(/<sequence\s+([^>]*?)>/)?.[1] ?? "").format;
+  return {
+    byId: formats,
+    timeline: formats.get(sequenceFormat) || null,
+  };
+}
+
 function projectName(xml) {
   return trim(xml.match(/<project\s+[^>]*name="([^"]+)"/)?.[1] ?? "");
 }
@@ -136,6 +150,19 @@ function maybeRenameTagOpen(openTag, newName) {
     return openTag.replace(/name="[^"]*"/, `name="${escapeAttr(newName)}"`);
   }
   return openTag.replace(/<([\w:-]+)/, `<$1 name="${escapeAttr(newName)}"`);
+}
+
+function buildElementOpenTag(tagName, attrs) {
+  let open = `<${tagName}`;
+  const orderedKeys = [];
+  for (const key of ["ref", "offset", "name", "start", "duration", "format", "tcFormat", "lane", "enabled"]) {
+    if (attrs[key] != null && attrs[key] !== "") orderedKeys.push(key);
+  }
+  for (const key of Object.keys(attrs)) {
+    if (!orderedKeys.includes(key) && attrs[key] != null && attrs[key] !== "") orderedKeys.push(key);
+  }
+  for (const key of orderedKeys) open += ` ${key}="${escapeAttr(attrs[key])}"`;
+  return `${open}>`;
 }
 
 function renameElementXML(xml, newName) {
@@ -1090,6 +1117,60 @@ function trimTimeMapToRange(points, rangeStart, rangeEnd) {
   return out.length >= 2 ? dedupeTimePoints(out) : points || [];
 }
 
+function detectMicroRampIntoHold(points, rangeStart, rangeEnd, frameDuration) {
+  if (
+    !points?.length ||
+    points.length < 3 ||
+    !rangeStart ||
+    !rangeEnd ||
+    !frameDuration ||
+    compareTime(rangeEnd, rangeStart) <= 0
+  ) {
+    return null;
+  }
+
+  let bestHold = null;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const a = points[index];
+    const b = points[index + 1];
+    if (compareTime(a.value, b.value) !== 0 || compareTime(a.time, b.time) >= 0) continue;
+    const overlapStart = compareTime(a.time, rangeStart) > 0 ? a.time : rangeStart;
+    const overlapEnd = compareTime(b.time, rangeEnd) < 0 ? b.time : rangeEnd;
+    if (compareTime(overlapEnd, overlapStart) <= 0) continue;
+    const duration = subTime(overlapEnd, overlapStart);
+    if (!bestHold || compareTime(duration, bestHold.duration) > 0) {
+      bestHold = { duration, value: a.value, start: overlapStart, end: overlapEnd };
+    }
+  }
+  if (!bestHold || compareTime(bestHold.end, rangeEnd) !== 0) return null;
+
+  const rangeDuration = subTime(rangeEnd, rangeStart);
+  const rampDuration = subTime(bestHold.start, rangeStart);
+  if (
+    compareTime(rampDuration, { num: 0n, den: 1n }) <= 0 ||
+    compareTime(rampDuration, frameDuration) > 0 ||
+    compareTime(bestHold.duration, subTime(rangeDuration, frameDuration)) < 0
+  ) {
+    return null;
+  }
+
+  const startValue = interpolateTimeMap(points, rangeStart);
+  const endValue = interpolateTimeMap(points, rangeEnd);
+  if (!startValue || !endValue) return null;
+  const absTime = (value) => value.num < 0n ? { num: -value.num, den: value.den } : value;
+  if (
+    compareTime(absTime(subTime(bestHold.value, startValue)), frameDuration) > 0 ||
+    compareTime(absTime(subTime(endValue, bestHold.value)), frameDuration) > 0
+  ) {
+    return null;
+  }
+  return {
+    rampDuration,
+    holdDuration: bestHold.duration,
+    holdValue: bestHold.value,
+  };
+}
+
 function shiftTimeMapValues(points, delta) {
   if (!points?.length || !delta || delta.num === 0n) return points || [];
   return points.map((pt) => ({
@@ -1892,7 +1973,7 @@ function shiftedStartForFlattenedPrimary(primaryAttrs, syncAttrs, outputTag, opt
   return formatTimeValue(addTime(primaryStart, subTime(syncStart, primaryOffset)));
 }
 
-function flattenSimpleSyncClips(xml, assets, reportLines) {
+function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) {
   const replacements = [];
   const stack = [];
   const skipped = [];
@@ -2105,6 +2186,7 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
         : node.attrs.offset;
       const nestedParts = [];
       const seenStyleIds = new Set();
+      let microRampHoldSplit = null;
       let composedTimeMapPoints =
         outerTimeMapPoints.length >= 2 && primaryTimeMapPoints.length >= 2
           ? composeTimeMaps(outerTimeMapPoints, primaryTimeMapPoints)
@@ -2366,6 +2448,22 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
                 hasHoldSegmentOverlappingRange(rebasedOuterOnlyPoints, clipStartValue, clipEndValue)
                   ? trimTimeMapToRange(rebasedOuterOnlyPoints, clipStartValue, clipEndValue)
                   : rebasedOuterOnlyPoints;
+              const frameDuration =
+                formatFrameDurations?.byId?.get(node.attrs.format || "") ||
+                formatFrameDurations?.timeline ||
+                null;
+              microRampHoldSplit = detectMicroRampIntoHold(
+                visibleOuterOnlyPoints,
+                clipStartValue,
+                clipEndValue,
+                frameDuration
+              );
+              if (microRampHoldSplit) {
+                reportLines.push(
+                  `split micro-ramp from hold: ${trim(node.attrs.name) || newName} ` +
+                  `offset=${trim(node.attrs.offset)} frame=${formatTimeValue(frameDuration)}`
+                );
+              }
               return buildTimeMapXML(quantizeTimeMapPoints(visibleOuterOnlyPoints, 2400n));
             })()
           : null;
@@ -2427,18 +2525,7 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
       const dedupedPrimaryMarkers = dedupeXMLItems(finalPrimaryMarkers);
       const dedupedOuterMarkers = dedupeXMLItems(finalOuterMarkers);
 
-      let newOpen = `<${outputTag}`;
-      const orderedKeys = [];
-      for (const key of ["ref", "offset", "name", "start", "duration", "format", "tcFormat", "lane", "enabled"]) {
-        if (attrs[key] != null && attrs[key] !== "") orderedKeys.push(key);
-      }
-      for (const key of Object.keys(attrs)) {
-        if (!orderedKeys.includes(key) && attrs[key] != null && attrs[key] !== "") orderedKeys.push(key);
-      }
-      for (const key of orderedKeys) {
-        newOpen += ` ${key}="${escapeAttr(attrs[key])}"`;
-      }
-      newOpen += ">";
+      const newOpen = buildElementOpenTag(outputTag, attrs);
 
       const addPart = (xml) => {
         if (!xml) return;
@@ -2520,7 +2607,44 @@ function flattenSimpleSyncClips(xml, assets, reportLines) {
         trailingStory,
         trailingMarkers,
       ].filter(Boolean).join("\n");
-      const replacement = `${newOpen}\n${finalBody}\n</${outputTag}>${trailingSuffix ? `\n${trailingSuffix}` : ""}`;
+      let replacement;
+      if (microRampHoldSplit && outputTag === "clip") {
+        const firstAttrs = {
+          ...attrs,
+          duration: formatTimeValue(microRampHoldSplit.rampDuration),
+        };
+        const secondOffset = addTime(
+          parseTimeValue(attrs.offset || ""),
+          microRampHoldSplit.rampDuration
+        );
+        const secondAttrs = {
+          ...attrs,
+          offset: formatTimeValue(secondOffset),
+          start: formatTimeValue(microRampHoldSplit.holdValue),
+          duration: formatTimeValue(microRampHoldSplit.holdDuration),
+        };
+        const timeMapPattern = /<timeMap\b[^>]*>[\s\S]*?<\/timeMap>/;
+        const firstBody = finalBody
+          .replace(timeMapPattern, "")
+          .replace(/<(?:marker|chapter-marker|keyword)\b[^>]*\/>/g, "")
+          .replace(/\n\s*\n/g, "\n");
+        const holdEnd = addTime(microRampHoldSplit.holdValue, microRampHoldSplit.holdDuration);
+        const holdMap = buildTimeMapXML([
+          { time: microRampHoldSplit.holdValue, value: microRampHoldSplit.holdValue, interp: "linear" },
+          { time: holdEnd, value: microRampHoldSplit.holdValue, interp: "linear" },
+        ]);
+        const secondBody = finalBody
+          .replace(timeMapPattern, holdMap)
+          .replace(/<(?:marker|chapter-marker|keyword)\b[^>]*\/>/g, (item) =>
+            clampMarkerOrKeywordXMLToClip(item, secondAttrs.start, secondAttrs.duration)
+          );
+        replacement =
+          `${buildElementOpenTag(outputTag, firstAttrs)}\n${firstBody}\n</${outputTag}>\n` +
+          `${buildElementOpenTag(outputTag, secondAttrs)}\n${secondBody}\n</${outputTag}>` +
+          `${trailingSuffix ? `\n${trailingSuffix}` : ""}`;
+      } else {
+        replacement = `${newOpen}\n${finalBody}\n</${outputTag}>${trailingSuffix ? `\n${trailingSuffix}` : ""}`;
+      }
       replacements.push({
         start: node.openStart,
         end: tagRegex.lastIndex,
@@ -2887,6 +3011,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const sourceXml = await fs.readFile(args.sourceXml, "utf8");
   const assets = collectAssetInfo(sourceXml);
+  const formatFrameDurations = collectFormatFrameDurations(sourceXml);
   const report = [];
   const version = fcpxmlVersion(sourceXml) || "1.12";
 
@@ -2899,7 +3024,7 @@ async function main() {
   let totalFlattened = 0;
   const skippedSyncReasons = new Set();
   for (let pass = 1; pass <= 2; pass += 1) {
-    const flattened = flattenSimpleSyncClips(patched, assets, report);
+    const flattened = flattenSimpleSyncClips(patched, assets, report, formatFrameDurations);
     patched = flattened.xml;
     totalFlattened += flattened.count;
     for (const item of flattened.skipped || []) skippedSyncReasons.add(item);
@@ -2944,6 +3069,7 @@ async function main() {
   report.push("- IMPORTANT: For clean flatten validation, clear editorial titles/markers before running Conform Prep when possible. Existing titles/markers can be preserved best-effort, but they can also create import-side noise that hides the real flattening result.");
   report.push("- v1 flattens simple sync-clips conservatively");
   report.push("- v1 renames source-backed clips to source filenames");
+  report.push("- expected clip-count note: a one-frame live segment followed by a hold is emitted as two adjacent clips so Final Cut preserves every visible frame; each occurrence increases the structural clip count by one without adding timeline duration");
   report.push("- multicam flattening and complex retime flattening still need more work");
 
   await validateAgainstDTD(patched, version, report);
