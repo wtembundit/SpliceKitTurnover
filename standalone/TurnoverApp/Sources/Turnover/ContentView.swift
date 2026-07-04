@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @ObservedObject var model: TurnoverModel
     @State private var dropTargeted = false
+    @State private var showBurnInCustomizer = false
 
     var body: some View {
         ZStack {
@@ -29,6 +30,9 @@ struct ContentView: View {
             .padding(32)
         }
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showBurnInCustomizer) {
+            BurnInCustomizerView(model: model)
+        }
     }
 
     private var header: some View {
@@ -84,18 +88,7 @@ struct ContentView: View {
 
     private var controls: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Spacer(minLength: 0)
-                Picker("Tool", selection: $model.selectedTool) {
-                    ForEach(TurnoverModel.Tool.allCases) { tool in
-                        Text(tool.rawValue).tag(tool)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize(horizontal: true, vertical: false)
-                Spacer(minLength: 0)
-            }
+            toolSelection
 
             VStack(alignment: .leading, spacing: 9) {
                 Text("SETTINGS")
@@ -106,6 +99,8 @@ struct ContentView: View {
 
                 contextualSettings
                     .fixedSize(horizontal: false, vertical: true)
+
+                requirementFooter
             }
             .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
@@ -117,13 +112,20 @@ struct ContentView: View {
                 Button {
                     model.runSelectedTool()
                 } label: {
-                    Label(model.state == .running ? "Processing..." : "Run \(model.selectedTool.rawValue)", systemImage: "wand.and.stars")
+                    Label(
+                        model.state == .running
+                            ? "Processing..."
+                            : (model.selectedTool == .dataBurnIn ? "Build Burn-In Manifest" : "Run \(model.selectedTool.rawValue)"),
+                        systemImage: "wand.and.stars"
+                    )
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.orange)
                 .disabled(!model.canRun)
 
-                if model.selectedTool != .vfxPullEDL && model.selectedTool != .vfxShotList {
+                if model.selectedTool != .vfxPullEDL
+                    && model.selectedTool != .vfxShotList
+                    && model.selectedTool != .dataBurnIn {
                     Toggle("Open result in Final Cut Pro", isOn: $model.openInFinalCut)
                         .toggleStyle(.checkbox)
                 }
@@ -140,12 +142,100 @@ struct ContentView: View {
         }
     }
 
+    private var toolSelection: some View {
+        VStack(spacing: 7) {
+            HStack {
+                Spacer(minLength: 0)
+                Button(TurnoverModel.Tool.conformPrep.selectorName) {
+                    model.selectedTool = .conformPrep
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(model.selectedTool == .conformPrep ? .accentColor : .gray)
+                Spacer(minLength: 0)
+            }
+            HStack(spacing: 10) {
+                Text("VFX TOOLS")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(1.2)
+                    .foregroundStyle(.secondary)
+                Picker("VFX Tools", selection: $model.selectedTool) {
+                    ForEach([
+                        TurnoverModel.Tool.vfxNaming,
+                        .autoMarker,
+                        .vfxPullEDL,
+                        .vfxShotList,
+                        .vfxTimeline,
+                    ]) { tool in
+                        Text(tool.selectorName).tag(tool)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize(horizontal: true, vertical: false)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var requirementText: String {
+        switch model.selectedTool {
+        case .conformPrep:
+            "Flattens sync clips, retains supported timeline attributes, and creates a video-only result. Always use a duplicate timeline."
+        case .vfxNaming:
+            "Requires the VFX Naming Motion title template. Auto Number works on VFX naming titles already placed in the timeline."
+        case .autoMarker:
+            "Requires VFX Naming titles in the timeline. Markers are created at their midpoint; renaming is optional."
+        case .vfxPullEDL:
+            "Requires numbered VFX Naming titles. Existing markers are not required; private marker anchors are generated automatically."
+        case .vfxShotList:
+            "Requires numbered VFX Naming titles, user markers for thumbnail frames, and a reference movie with matching timeline timecode."
+        case .vfxTimeline:
+            "Requires numbered VFX Naming titles and delivery filenames containing the matching VFX shot numbers."
+        case .dataBurnIn:
+            "Builds a frame-resolved preview manifest. Transparent ProRes rendering is not enabled in this prototype."
+        }
+    }
+
+    private var requiresVFXNamingTemplate: Bool {
+        model.selectedTool == .vfxNaming || model.selectedTool == .autoMarker
+    }
+
+    private var requirementFooter: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "info.circle")
+                .foregroundStyle(.orange)
+            Text(requirementText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            if requiresVFXNamingTemplate {
+                if model.isVFXNamingTemplateInstalled {
+                    Label("Template Installed", systemImage: "checkmark.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                } else {
+                    Button("Install VFX Naming Template") { model.installVFXNamingTemplate() }
+                        .controlSize(.small)
+                }
+            }
+        }
+        .overlay(alignment: .bottomLeading) {
+            if !model.templateInstallStatus.isEmpty && requiresVFXNamingTemplate {
+                Text(model.templateInstallStatus)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .offset(y: 16)
+            }
+        }
+    }
+
     @ViewBuilder
     private var contextualSettings: some View {
         HStack(spacing: 12) {
             switch model.selectedTool {
             case .conformPrep:
-                Text("No additional settings")
+                Text("Flattens sync clips to source media while retaining retiming, transforms, and key clip attributes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             case .autoMarker:
@@ -209,6 +299,28 @@ struct ContentView: View {
                 Text("Uses user markers as thumbnail anchors")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            case .dataBurnIn:
+                HStack(spacing: 10) {
+                    Picker("Preset", selection: $model.burnInPreset) {
+                        ForEach(TurnoverModel.BurnInPreset.allCases) { preset in
+                            Text(preset.rawValue).tag(preset)
+                        }
+                    }
+                    .frame(width: 225)
+                    .onChange(of: model.burnInPreset) { _, _ in model.applyBurnInPreset() }
+
+                    Button("Choose Video...") { model.chooseBurnInVideo() }
+                    Text(model.burnInVideoURL?.lastPathComponent ?? "Transparent ProRes 4444 overlay")
+                        .font(.caption)
+                        .foregroundStyle(model.burnInVideoURL == nil ? .secondary : .primary)
+                        .lineLimit(1)
+                        .frame(maxWidth: 245, alignment: .leading)
+                    if model.burnInVideoURL != nil {
+                        Button("Clear") { model.clearBurnInVideo() }
+                            .controlSize(.small)
+                    }
+                    Button("Customize...") { showBurnInCustomizer = true }
+                }
             }
             Spacer(minLength: 0)
         }

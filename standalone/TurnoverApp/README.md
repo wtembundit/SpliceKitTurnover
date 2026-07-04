@@ -33,7 +33,6 @@ The source is never overwritten. Bundle inputs are read from `Info.fcpxml`; gene
 - **VFX Naming**: auto-number VFX naming titles or reset them to `XXXX`.
 - **VFX Timeline**: place returned VFX renders and add the `VFX Deliveries` keyword.
 - **VFX Shot List**: extract marker-anchored thumbnails from a user-exported reference movie and generate an Excel workbook.
-
 ## VFX Shot List
 
 VFX Shot List requires:

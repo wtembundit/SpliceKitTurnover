@@ -7,7 +7,7 @@ struct TurnoverApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(model: model)
-                .frame(minWidth: 760, minHeight: 600)
+                .frame(minWidth: 940, minHeight: 640)
         }
         .windowStyle(.hiddenTitleBar)
         .commands {

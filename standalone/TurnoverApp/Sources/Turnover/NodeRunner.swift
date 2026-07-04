@@ -64,6 +64,10 @@ enum NodeRunner {
         bundledScript(named: "generate_vfx_shot_list_excel.mjs")
     }
 
+    static func dataBurnInManifestScript() -> URL? {
+        bundledScript(named: "build_data_burn_in_manifest.mjs")
+    }
+
     static func importPreparationScript() -> URL? {
         bundledScript(named: "prepare_turnover_import_fcpxml.mjs")
     }

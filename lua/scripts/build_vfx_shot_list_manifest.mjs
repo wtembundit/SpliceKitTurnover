@@ -89,6 +89,10 @@ function buildManifestRows(groups, timelineFrameDuration, timelineStartSeconds, 
           Number(existing.sourceOutSeconds || 0),
           Number(layer.sourceOutSeconds || 0),
         );
+        const metadata = trim(layer.customMetadata);
+        if (metadata && !trim(existing.customMetadata).split(" | ").includes(metadata)) {
+          existing.customMetadata = [trim(existing.customMetadata), metadata].filter(Boolean).join(" | ");
+        }
       }
     }
     const baseName = safeFilename(first.vfxNumber);
@@ -110,7 +114,13 @@ function buildManifestRows(groups, timelineFrameDuration, timelineStartSeconds, 
       sourceFilename: uniqueSources.map((row) => row.sourceFilename).join("\n"),
       sourceTCIn: uniqueSources.map((row) => secondsToTC(row.sourceInSeconds, row.sourceFrameDuration, row.sourceTcFormat)).join("\n"),
       sourceTCOut: uniqueSources.map((row) => secondsToTC(row.sourceOutSeconds, row.sourceFrameDuration, row.sourceTcFormat)).join("\n"),
-      customMetadata: "",
+      customMetadata: uniqueSources.map((row) => {
+        const metadata = trim(row.customMetadata);
+        if (!metadata) return "";
+        return uniqueSources.length > 1 && row.sourceFilename
+          ? `${row.sourceFilename}: ${metadata}`
+          : metadata;
+      }).filter(Boolean).join("\n"),
       remark: "",
       projectName,
       suggestedThumbName: `${imageBase}.jpg`,

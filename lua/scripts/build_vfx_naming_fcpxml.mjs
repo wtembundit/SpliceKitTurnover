@@ -106,7 +106,7 @@ function collectTitles(xml) {
     const lines = extractTitleText(inner);
     const firstLine = trim(lines[0]);
     const titleName = trim(node.attrs.name);
-    const looksLikeCode = /^[A-Z0-9_-]+_(?:XXXX|\d{4})$/.test(firstLine);
+    const looksLikeCode = /^[A-Z0-9_-]+_(?:XXXX|\d{4})$/i.test(firstLine);
     if (!titleName.toLowerCase().includes("vfx naming") && !looksLikeCode) continue;
     titles.push({
       titleName,
@@ -152,7 +152,7 @@ function buildPlan(titles, args) {
     let match;
     let newCode;
     if (args.mode === "auto") {
-      match = /^(.*?)_XXXX$/.exec(title.firstLine);
+      match = /^(.*?)_XXXX$/i.exec(title.firstLine);
       if (!match) continue;
       const base = match[1];
       const next = counters.has(base) ? counters.get(base) + args.step : args.start;
@@ -184,7 +184,7 @@ async function main() {
   const plan = buildPlan(titles, args);
   if (plan.length === 0) {
     throw new Error(args.mode === "auto"
-      ? "No VFX naming titles ending in _XXXX were found."
+      ? "No VFX naming titles ending in _XXXX (case-insensitive) were found."
       : "No VFX naming titles ending in four digits were found.");
   }
 

@@ -36,7 +36,7 @@ cp "$ROOT/Install Turnover.command" "$PLUGIN_STAGE/"
 rsync -a --exclude '.DS_Store' --exclude 'data' "$PLUGIN_DIR" "$PLUGIN_STAGE/plugins/"
 rsync -a --exclude '.DS_Store' --exclude 'scripts/node_modules' "$ROOT/lua" "$PLUGIN_STAGE/"
 rsync -a --exclude '.DS_Store' "$ROOT/motion-templates" "$PLUGIN_STAGE/"
-rsync -a --exclude '.DS_Store' "$ROOT/docs" "$PLUGIN_STAGE/"
+rsync -a --exclude '.DS_Store' --exclude 'data-burn-in-design.md' "$ROOT/docs" "$PLUGIN_STAGE/"
 cp "$ROOT/README.md" "$PLUGIN_STAGE/"
 
 cp -R "$ROOT/standalone/TurnoverApp/build/Turnover.app" "$APP_STAGE/"

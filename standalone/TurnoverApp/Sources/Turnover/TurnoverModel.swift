@@ -6,13 +6,68 @@ import UniformTypeIdentifiers
 final class TurnoverModel: ObservableObject {
     enum Tool: String, CaseIterable, Identifiable {
         case conformPrep = "Conform Prep"
+        case vfxNaming = "VFX Naming"
         case autoMarker = "Auto Marker"
         case vfxPullEDL = "VFX Pull EDL"
-        case vfxNaming = "VFX Naming"
-        case vfxTimeline = "VFX Timeline"
         case vfxShotList = "VFX Shot List"
+        case vfxTimeline = "VFX Timeline"
+        case dataBurnIn = "Data Burn-In"
 
         var id: String { rawValue }
+
+        var selectorName: String {
+            switch self {
+            case .vfxNaming: "Naming"
+            case .vfxPullEDL: "Pull EDL"
+            case .vfxShotList: "Shot List"
+            case .vfxTimeline: "Timeline"
+            default: rawValue
+            }
+        }
+    }
+
+    enum BurnInPreset: String, CaseIterable, Identifiable, Codable {
+        case editorialReview = "Editorial Review"
+        case vfxReview = "VFX Review"
+        case sourceQC = "Source QC"
+        case audioReview = "Audio Review"
+        case custom = "Custom"
+
+        var id: String { rawValue }
+    }
+
+    enum BurnInAnchor: String, CaseIterable, Identifiable, Codable {
+        case topLeft = "Top Left"
+        case topCenter = "Top Center"
+        case topRight = "Top Right"
+        case bottomLeft = "Bottom Left"
+        case bottomCenter = "Bottom Center"
+        case bottomRight = "Bottom Right"
+
+        var id: String { rawValue }
+    }
+
+    enum BurnInTextColor: String, CaseIterable, Identifiable, Codable {
+        case white = "White"
+        case yellow = "Yellow"
+        case cyan = "Cyan"
+        case red = "Red"
+        case black = "Black"
+
+        var id: String { rawValue }
+    }
+
+    struct BurnInField: Identifiable, Codable, Equatable {
+        var anchor: BurnInAnchor
+        var enabled: Bool
+        var template: String
+        var fontSize: Double
+        var horizontalPadding: Double
+        var verticalPadding: Double
+        var textColor: BurnInTextColor
+        var backgroundOpacity: Double
+
+        var id: BurnInAnchor { anchor }
     }
 
     enum MarkerKind: String, CaseIterable, Identifiable {
@@ -49,6 +104,55 @@ final class TurnoverModel: ObservableObject {
         case failed(String)
     }
 
+    private struct BurnInManifest: Decodable {
+        struct Timeline: Decodable {
+            let startSeconds: Double
+            let durationSeconds: Double
+            let frameDurationSeconds: Double
+            let tcFormat: String
+            let width: Int?
+            let height: Int?
+            let colorSpace: String?
+            let formatName: String?
+        }
+
+        struct VideoSegment: Decodable {
+            let timelineStartSeconds: Double
+            let timelineEndSeconds: Double
+            let sourceFilename: String
+            let sourceInSeconds: Double
+            let sourceOutSeconds: Double
+            let sourceFrameDuration: Double
+            let sourceTcFormat: String
+        }
+
+        struct VFXTitle: Decodable {
+            let timelineStartSeconds: Double
+            let timelineEndSeconds: Double
+            let vfxNumber: String
+            let note: String
+        }
+
+        struct AudioRole: Decodable {
+            let timelineStartSeconds: Double
+            let timelineEndSeconds: Double
+            let role: String
+        }
+
+        let project: String
+        let event: String
+        let timeline: Timeline
+        let videoSegments: [VideoSegment]
+        let vfxTitles: [VFXTitle]
+        let audioRoles: [AudioRole]
+    }
+
+    private struct SavedBurnInSettings: Codable {
+        let fields: [BurnInField]
+        let audioRoleFilter: String
+        let conditionalText: String
+    }
+
     @Published var sourceURL: URL?
     @Published var outputURL: URL?
     @Published var reportURL: URL?
@@ -69,17 +173,68 @@ final class TurnoverModel: ObservableObject {
     @Published var referenceMovieURL: URL?
     @Published var cacheSizeText = "0 KB"
     @Published var updateStatus = "Check for Updates"
+    @Published var isVFXNamingTemplateInstalled = false
+    @Published var templateInstallStatus = ""
+    @Published var burnInFields = TurnoverModel.defaultBurnInFields()
+    @Published var selectedBurnInAnchor: BurnInAnchor = .topLeft
+    @Published var burnInAudioRoleFilter = ""
+    @Published var burnInConditionalText = "TEMP AUDIO"
+    @Published var burnInPositionSeconds = 0.0
+    @Published var burnInDurationSeconds = 0.0
+    @Published var burnInPreset: BurnInPreset = .editorialReview
+    @Published var burnInVideoURL: URL?
+
+    private var burnInManifest: BurnInManifest?
+    private let burnInSettingsKey = "Turnover.DataBurnIn.CustomPreset.v2"
 
     private let latestReleaseAPI = URL(string: "https://api.github.com/repos/wtembundit/SpliceKitTurnover/releases/latest")!
 
     init() {
+        loadBurnInCustomPreset()
         do {
             try CacheManager.prepareAndClean()
             refreshCacheSize()
+            refreshVFXNamingTemplateStatus()
             checkForUpdates(showResult: false)
         } catch {
             log = "Cache cleanup warning: \(error.localizedDescription)"
         }
+    }
+
+    func refreshVFXNamingTemplateStatus() {
+        isVFXNamingTemplateInstalled = FileManager.default.fileExists(
+            atPath: vfxNamingTemplateDestination.appendingPathComponent("VFX NAMING.moti").path
+        )
+    }
+
+    func installVFXNamingTemplate() {
+        guard let source = Bundle.main.resourceURL?
+            .appendingPathComponent("Motion Templates.localized", isDirectory: true)
+            .appendingPathComponent("Titles.localized", isDirectory: true)
+            .appendingPathComponent("VFX", isDirectory: true)
+            .appendingPathComponent("VFX Naming", isDirectory: true),
+              FileManager.default.fileExists(atPath: source.appendingPathComponent("VFX NAMING.moti").path) else {
+            templateInstallStatus = "Bundled template is missing."
+            return
+        }
+
+        do {
+            let destination = vfxNamingTemplateDestination.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            if FileManager.default.fileExists(atPath: vfxNamingTemplateDestination.path) {
+                try FileManager.default.removeItem(at: vfxNamingTemplateDestination)
+            }
+            try FileManager.default.copyItem(at: source, to: vfxNamingTemplateDestination)
+            refreshVFXNamingTemplateStatus()
+            templateInstallStatus = "Installed. Restart Final Cut Pro to refresh Titles."
+        } catch {
+            templateInstallStatus = "Install failed: \(error.localizedDescription)"
+        }
+    }
+
+    private var vfxNamingTemplateDestination: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Movies/Motion Templates.localized/Titles.localized/VFX/VFX Naming", isDirectory: true)
     }
 
     func checkForUpdates(showResult: Bool = true) {
@@ -156,6 +311,80 @@ final class TurnoverModel: ObservableObject {
             && (selectedTool != .vfxShotList || referenceMovieURL != nil)
     }
 
+    var burnInTimelineLabel: String {
+        guard let manifest = burnInManifest else { return "Build a manifest to preview timeline values." }
+        let absolute = manifest.timeline.startSeconds + burnInPositionSeconds
+        return "Frame preview: \(formatTimecode(seconds: absolute, frameDuration: manifest.timeline.frameDurationSeconds, tcFormat: manifest.timeline.tcFormat))"
+    }
+
+    func burnInPreviewText(for field: BurnInField) -> String {
+        guard let manifest = burnInManifest else { return field.template }
+        let absolute = manifest.timeline.startSeconds + burnInPositionSeconds
+        let segment = manifest.videoSegments
+            .filter { absolute >= $0.timelineStartSeconds && absolute < $0.timelineEndSeconds }
+            .last
+        let title = manifest.vfxTitles
+            .filter { absolute >= $0.timelineStartSeconds && absolute < $0.timelineEndSeconds }
+            .last
+        let roles = manifest.audioRoles
+            .filter { absolute >= $0.timelineStartSeconds && absolute < $0.timelineEndSeconds }
+            .map(\.role)
+        let sourceSeconds: Double? = segment.map {
+            let timelineSpan = max($0.timelineEndSeconds - $0.timelineStartSeconds, 0)
+            guard timelineSpan > 0 else { return $0.sourceInSeconds }
+            let ratio = (absolute - $0.timelineStartSeconds) / timelineSpan
+            return $0.sourceInSeconds + (($0.sourceOutSeconds - $0.sourceInSeconds) * ratio)
+        }
+        let values: [String: String] = [
+            "project": manifest.project,
+            "event": manifest.event,
+            "timeline_tc": formatTimecode(seconds: absolute, frameDuration: manifest.timeline.frameDurationSeconds, tcFormat: manifest.timeline.tcFormat),
+            "timeline_frame": String(Int((burnInPositionSeconds / manifest.timeline.frameDurationSeconds).rounded(.down))),
+            "source_file": segment?.sourceFilename ?? "",
+            "source_tc": sourceSeconds.map { formatTimecode(seconds: $0, frameDuration: segment?.sourceFrameDuration ?? manifest.timeline.frameDurationSeconds, tcFormat: segment?.sourceTcFormat ?? "") } ?? "",
+            "vfx_number": title?.vfxNumber ?? "",
+            "vfx_note": title?.note ?? "",
+            "audio_role": roles.joined(separator: ", "),
+            "custom_text": burnInConditionalText,
+        ]
+        var rendered = field.template
+        for (token, value) in values {
+            rendered = rendered.replacingOccurrences(of: "{\(token)}", with: value)
+        }
+        let filter = burnInAudioRoleFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !filter.isEmpty && roles.contains(where: { $0.localizedCaseInsensitiveContains(filter) }) {
+            rendered += rendered.isEmpty ? burnInConditionalText : "\n\(burnInConditionalText)"
+        }
+        return rendered
+    }
+
+    var selectedBurnInFieldIndex: Int {
+        burnInFields.firstIndex(where: { $0.anchor == selectedBurnInAnchor }) ?? 0
+    }
+
+    static func defaultBurnInFields() -> [BurnInField] {
+        BurnInAnchor.allCases.map { anchor in
+            let template: String
+            switch anchor {
+            case .topLeft: template = "{project}"
+            case .topRight: template = "{timeline_tc}"
+            case .bottomLeft: template = "{source_file}\n{source_tc}"
+            case .bottomRight: template = "{vfx_number}"
+            default: template = ""
+            }
+            return BurnInField(
+                anchor: anchor,
+                enabled: !template.isEmpty,
+                template: template,
+                fontSize: 20,
+                horizontalPadding: 48,
+                verticalPadding: 36,
+                textColor: .white,
+                backgroundOpacity: 0.35
+            )
+        }
+    }
+
     var dropTypeIdentifiers: [String] {
         [UTType.fileURL.identifier] + finalCutPasteboardTypes
     }
@@ -171,6 +400,69 @@ final class TurnoverModel: ObservableObject {
         panel.canChooseDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         accept(url: url)
+    }
+
+    func chooseBurnInVideo() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose a Video to Burn In"
+        panel.message = "Choose a reference or master video. Leave this empty to render a transparent ProRes 4444 overlay later."
+        panel.allowsMultipleSelection = false
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.movie]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        burnInVideoURL = url
+    }
+
+    func clearBurnInVideo() {
+        burnInVideoURL = nil
+    }
+
+    func applyBurnInPreset() {
+        burnInFields = Self.defaultBurnInFields()
+        switch burnInPreset {
+        case .editorialReview:
+            burnInAudioRoleFilter = ""
+        case .vfxReview:
+            setBurnInField(.bottomLeft, template: "{vfx_number}\n{vfx_note}", enabled: true)
+            burnInAudioRoleFilter = ""
+        case .sourceQC:
+            setBurnInField(.bottomLeft, template: "{source_file}\n{source_tc}", enabled: true)
+            burnInAudioRoleFilter = ""
+        case .audioReview:
+            setBurnInField(.topCenter, template: "{audio_role}\n{custom_text}", enabled: true)
+            burnInAudioRoleFilter = "Dialogue"
+            burnInConditionalText = "TEMP AUDIO"
+        case .custom:
+            break
+        }
+    }
+
+    func saveBurnInCustomPreset() {
+        burnInPreset = .custom
+        let settings = SavedBurnInSettings(
+            fields: burnInFields,
+            audioRoleFilter: burnInAudioRoleFilter,
+            conditionalText: burnInConditionalText
+        )
+        if let data = try? JSONEncoder().encode(settings) {
+            UserDefaults.standard.set(data, forKey: burnInSettingsKey)
+        }
+    }
+
+    private func loadBurnInCustomPreset() {
+        guard let data = UserDefaults.standard.data(forKey: burnInSettingsKey),
+              let settings = try? JSONDecoder().decode(SavedBurnInSettings.self, from: data) else { return }
+        burnInFields = settings.fields
+        burnInAudioRoleFilter = settings.audioRoleFilter
+        burnInConditionalText = settings.conditionalText
+        burnInPreset = .custom
+    }
+
+    private func setBurnInField(_ anchor: BurnInAnchor, template: String, enabled: Bool) {
+        guard let index = burnInFields.firstIndex(where: { $0.anchor == anchor }) else { return }
+        burnInFields[index].template = template
+        burnInFields[index].enabled = enabled
     }
 
     func accept(url: URL) {
@@ -310,6 +602,62 @@ final class TurnoverModel: ObservableObject {
             runVFXTimeline()
         case .vfxShotList:
             runVFXShotList()
+        case .dataBurnIn:
+            runDataBurnIn()
+        }
+    }
+
+    func runDataBurnIn() {
+        guard let sourceURL else { return }
+        guard let nodeURL = NodeRunner.findNode() else {
+            state = .failed("The bundled Node.js runtime is missing.")
+            return
+        }
+        guard let scriptURL = NodeRunner.dataBurnInManifestScript() else {
+            state = .failed("The bundled Data Burn-In manifest planner is missing.")
+            return
+        }
+        guard let destination = chooseBurnInManifestOutputURL(for: sourceURL) else {
+            log = "Data Burn-In manifest export cancelled."
+            return
+        }
+        let plannerSource = sourceURL.pathExtension.lowercased() == "fcpxmld"
+            ? sourceURL.appendingPathComponent("Info.fcpxml")
+            : sourceURL
+        let report = temporaryReportURL(tool: "data-burn-in")
+        state = .running
+        outputURL = nil
+        reportURL = nil
+        log = "Building frame-resolved Data Burn-In manifest..."
+
+        Task {
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    try await NodeRunner.run(
+                        executable: nodeURL,
+                        arguments: [
+                            scriptURL.path,
+                            "--source-xml", plannerSource.path,
+                            "--output-manifest", destination.path,
+                            "--report", report.path,
+                        ]
+                    )
+                }.value
+                let data = try Data(contentsOf: destination)
+                let manifest = try JSONDecoder().decode(BurnInManifest.self, from: data)
+                burnInManifest = manifest
+                burnInDurationSeconds = max(manifest.timeline.durationSeconds, 0)
+                burnInPositionSeconds = 0
+                outputURL = destination
+                cacheDebugArtifacts(tool: "Data-Burn-In", sourceXML: plannerSource, output: destination, report: report)
+                try? FileManager.default.removeItem(at: report)
+                state = .succeeded
+                log = result.isEmpty ? "Data Burn-In manifest completed." : result
+            } catch {
+                try? FileManager.default.removeItem(at: report)
+                state = .failed(error.localizedDescription)
+                log = error.localizedDescription
+            }
         }
     }
 
@@ -816,6 +1164,42 @@ final class TurnoverModel: ObservableObject {
         return url.pathExtension.lowercased() == "fcpxml" ? url : url.appendingPathExtension("fcpxml")
     }
 
+    private func chooseBurnInManifestOutputURL(for source: URL) -> URL? {
+        let panel = NSSavePanel()
+        panel.title = "Save Data Burn-In Manifest"
+        panel.prompt = "Build Manifest"
+        panel.allowedContentTypes = [UTType.json]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "\(source.deletingPathExtension().lastPathComponent) - BurnInManifest.json"
+        panel.directoryURL = source.path.hasPrefix(CacheManager.inboxURL.path + "/")
+            ? FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first
+            : source.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        return url.pathExtension.lowercased() == "json" ? url : url.appendingPathExtension("json")
+    }
+
+    private func formatTimecode(seconds: Double, frameDuration: Double, tcFormat: String) -> String {
+        let duration = frameDuration > 0 ? frameDuration : (1.0 / 24.0)
+        let fps = max(1, Int((1.0 / duration).rounded()))
+        var frames = max(0, Int((seconds / duration + 0.000001).rounded(.down)))
+        if tcFormat.uppercased() == "DF", fps == 30 || fps == 60 {
+            let dropFrames = Int((Double(fps) * 0.0666666667).rounded())
+            let framesPerMinute = (fps * 60) - dropFrames
+            let framesPerTenMinutes = (fps * 600) - (dropFrames * 9)
+            let tenMinuteChunks = frames / framesPerTenMinutes
+            let remainder = frames % framesPerTenMinutes
+            frames += (dropFrames * 9 * tenMinuteChunks)
+                + (dropFrames * max(0, remainder - dropFrames) / framesPerMinute)
+        }
+        let ff = frames % fps
+        let totalSeconds = frames / fps
+        let ss = totalSeconds % 60
+        let totalMinutes = totalSeconds / 60
+        let mm = totalMinutes % 60
+        let hh = (totalMinutes / 60) % 24
+        return String(format: "%02d:%02d:%02d:%02d", hh, mm, ss, ff)
+    }
+
     private func cacheDebugArtifacts(tool: String, sourceXML: URL, output: URL, report: URL) {
         let outputIsCached = output.path.hasPrefix(CacheManager.inboxURL.path + "/")
         let folder: URL
@@ -831,7 +1215,8 @@ final class TurnoverModel: ObservableObject {
             (report, folder.appendingPathComponent("Report.txt")),
         ]
         if !outputIsCached {
-            items.append((output, folder.appendingPathComponent("Output.fcpxml")))
+            let outputExtension = output.pathExtension.isEmpty ? "dat" : output.pathExtension
+            items.append((output, folder.appendingPathComponent("Output.\(outputExtension)")))
         }
         for (source, destination) in items where manager.fileExists(atPath: source.path) {
             guard source.standardizedFileURL != destination.standardizedFileURL else { continue }

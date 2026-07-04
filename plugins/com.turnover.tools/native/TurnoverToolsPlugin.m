@@ -15,7 +15,7 @@ static NSTextField *gRunLabel = nil;
 static BOOL gToolRunInProgress = NO;
 static BOOL gDidAutoCheckForUpdates = NO;
 static NSString *gUpdateStatusText = @"Not checked";
-static NSString * const TTTurnoverVersion = @"1.3.0";
+static NSString * const TTTurnoverVersion = @"1.3.1";
 static NSString * const TTLatestReleaseAPI = @"https://api.github.com/repos/wtembundit/SpliceKitTurnover/releases/latest";
 static NSString * const TTLatestReleaseURL = @"https://github.com/wtembundit/SpliceKitTurnover/releases/latest";
 

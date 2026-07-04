@@ -101,6 +101,8 @@ function collectAssetInfo(xml) {
       sourcePath,
       start: trim(attrs.start),
       duration: trim(attrs.duration),
+      hasVideo: attrs.hasVideo === "1",
+      hasAudio: attrs.hasAudio === "1",
     });
   }
   return assets;
@@ -1983,25 +1985,22 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
   const assetClipOuterSpeedCandidates = new Set([
     "SC_22_1_C16_01_A_HS",
   ]);
-  const tagRegex = /<(\/?)([\w:_-]+)(.*?)(\/?)>/gs;
-  let match;
-  while ((match = tagRegex.exec(xml))) {
-    const [, closing, tagName, attrStr, selfClose] = match;
-    const isClosing = closing === "/";
-    const isSelfClosing = selfClose === "/";
-    if (!isClosing) {
+  for (const token of scanXMLTags(xml)) {
+    const tagName = token.name;
+    if (!token.closing) {
       const node = {
         tag: tagName,
-        attrs: parseAttrs(attrStr),
-        openStart: match.index,
-        openEnd: tagRegex.lastIndex,
+        attrs: parseAttrs(token.attrText),
+        openStart: token.start,
+        openEnd: token.end,
       };
-      if (!isSelfClosing) stack.push(node);
+      if (!token.selfClosing) stack.push(node);
     } else {
-      const node = stack.pop();
+      const node = stack.at(-1);
       if (!node || node.tag !== tagName) continue;
+      stack.pop();
       if (node.tag !== "sync-clip") continue;
-      const body = xml.slice(node.openEnd, match.index);
+      const body = xml.slice(node.openEnd, token.start);
       const analyzed = analyzeSimpleSyncClip(body, assets);
       if (!analyzed) {
         const reasons = analyzeSyncClipRisk(body);
@@ -2647,7 +2646,7 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
       }
       replacements.push({
         start: node.openStart,
-        end: tagRegex.lastIndex,
+        end: token.end,
         replacement,
       });
       reportLines.push(`flattened sync-clip -> ${primaryTag}: ${trim(node.attrs.name)} => ${newName}`);
@@ -2841,6 +2840,242 @@ function removeUnnamedSourceMarkers(xml) {
   return { xml: patched, count };
 }
 
+function summarizeAudioStructures(xml) {
+  const summary = {
+    audioAssets: 0,
+    connectedAudioItems: 0,
+    connectedAudioItemsInLanes: 0,
+    audioChannelSources: countMatches(xml, /<audio-channel-source\b/g),
+    audioRoleSources: countMatches(xml, /<audio-role-source\b/g),
+    syncSources: countMatches(xml, /<sync-source\b/g),
+    audioFilters: countMatches(xml, /<filter-audio\b/g),
+    audioAdjustments: countMatches(xml, /<adjust-(?:volume|panner)\b/g),
+    splitEditContainers: 0,
+    explicitAudioOnlyClips: 0,
+    explicitVideoOnlyClips: 0,
+    implicitAVClips: 0,
+  };
+
+  for (const match of xml.matchAll(/<asset\b([^>]*)>/g)) {
+    if (parseAttrs(match[1] || "").hasAudio === "1") summary.audioAssets += 1;
+  }
+  for (const match of xml.matchAll(/<audio(?=[\s/>])([^>]*)>/g)) {
+    summary.connectedAudioItems += 1;
+    if (parseAttrs(match[1] || "").lane != null) summary.connectedAudioItemsInLanes += 1;
+  }
+  for (const match of xml.matchAll(/<(asset-clip|ref-clip|mc-clip)\b([^>]*)>/g)) {
+    const attrs = parseAttrs(match[2] || "");
+    if (attrs.audioStart != null || attrs.audioDuration != null) summary.splitEditContainers += 1;
+    if (attrs.srcEnable === "audio") summary.explicitAudioOnlyClips += 1;
+    else if (attrs.srcEnable === "video") summary.explicitVideoOnlyClips += 1;
+    else summary.implicitAVClips += 1;
+  }
+  for (const match of xml.matchAll(/<(clip|sync-clip)\b([^>]*)>/g)) {
+    const attrs = parseAttrs(match[2] || "");
+    if (attrs.audioStart != null || attrs.audioDuration != null) summary.splitEditContainers += 1;
+  }
+  return summary;
+}
+
+function appendAudioInventory(reportLines, label, summary) {
+  reportLines.push(`audio inventory (${label}):`);
+  reportLines.push(`- assets with audio: ${summary.audioAssets}`);
+  reportLines.push(`- connected audio items: ${summary.connectedAudioItems}`);
+  reportLines.push(`- connected audio items with lane: ${summary.connectedAudioItemsInLanes}`);
+  reportLines.push(`- audio channel sources: ${summary.audioChannelSources}`);
+  reportLines.push(`- audio role sources: ${summary.audioRoleSources}`);
+  reportLines.push(`- sync sources: ${summary.syncSources}`);
+  reportLines.push(`- audio filters: ${summary.audioFilters}`);
+  reportLines.push(`- volume/panner adjustments: ${summary.audioAdjustments}`);
+  reportLines.push(`- containers with J/L audio timing: ${summary.splitEditContainers}`);
+  reportLines.push(`- explicit audio-only clips: ${summary.explicitAudioOnlyClips}`);
+  reportLines.push(`- explicit video-only clips: ${summary.explicitVideoOnlyClips}`);
+  reportLines.push(`- implicit A/V source clips: ${summary.implicitAVClips}`);
+}
+
+function scanXMLTags(xml) {
+  const tags = [];
+  let index = 0;
+  while (index < xml.length) {
+    const start = xml.indexOf("<", index);
+    if (start < 0) break;
+    if (xml.startsWith("<!--", start)) {
+      const end = xml.indexOf("-->", start + 4);
+      index = end < 0 ? xml.length : end + 3;
+      continue;
+    }
+    if (xml.startsWith("<![CDATA[", start)) {
+      const end = xml.indexOf("]]>", start + 9);
+      index = end < 0 ? xml.length : end + 3;
+      continue;
+    }
+    if (xml.startsWith("<?", start)) {
+      const end = xml.indexOf("?>", start + 2);
+      index = end < 0 ? xml.length : end + 2;
+      continue;
+    }
+    let quote = "";
+    let end = start + 1;
+    for (; end < xml.length; end += 1) {
+      const char = xml[end];
+      if (quote) {
+        if (char === quote) quote = "";
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === ">") {
+        break;
+      }
+    }
+    if (end >= xml.length) break;
+    const raw = xml.slice(start, end + 1);
+    if (!raw.startsWith("<!")) {
+      const head = raw.match(/^<\s*(\/?)\s*([\w:_-]+)/);
+      if (head) {
+        const nameEnd = head[0].length;
+        tags.push({
+          start,
+          end: end + 1,
+          raw,
+          closing: head[1] === "/",
+          name: head[2],
+          selfClosing: /\/\s*>$/.test(raw),
+          attrText: raw.slice(nameEnd, raw.length - 1),
+        });
+      }
+    }
+    index = end + 1;
+  }
+  return tags;
+}
+
+function removeElementTags(xml, tagNames) {
+  const targets = new Set(tagNames);
+  const stack = [];
+  const ranges = [];
+  for (const token of scanXMLTags(xml)) {
+    const tag = token.name;
+    if (!token.closing) {
+      const insideTarget = stack.some((item) => item.remove);
+      const remove = targets.has(tag);
+      if (token.selfClosing) {
+        if (remove && !insideTarget) ranges.push([token.start, token.end]);
+      } else {
+        stack.push({ tag, start: token.start, remove, insideTarget });
+      }
+      continue;
+    }
+    const node = stack.at(-1);
+    if (!node || node.tag !== tag) continue;
+    stack.pop();
+    if (node.remove && !node.insideTarget) ranges.push([node.start, token.end]);
+  }
+  let output = xml;
+  for (const [start, end] of ranges.sort((a, b) => b[0] - a[0])) {
+    output = output.slice(0, start) + output.slice(end);
+  }
+  return output;
+}
+
+function removeSourceNodesForAudioOnlyAssets(xml, assets) {
+  const sourceTags = new Set(["asset-clip", "ref-clip", "mc-clip"]);
+  const stack = [];
+  const ranges = [];
+  for (const token of scanXMLTags(xml)) {
+    const tag = token.name;
+    if (!token.closing) {
+      const attrs = parseAttrs(token.attrText || "");
+      const asset = sourceTags.has(tag) ? assets.get(trim(attrs.ref)) : null;
+      const remove = Boolean(asset?.hasAudio && !asset?.hasVideo);
+      const insideTarget = stack.some((item) => item.remove);
+      if (token.selfClosing) {
+        if (remove && !insideTarget) ranges.push([token.start, token.end]);
+      } else {
+        stack.push({ tag, start: token.start, remove, insideTarget });
+      }
+      continue;
+    }
+    const node = stack.at(-1);
+    if (!node || node.tag !== tag) continue;
+    stack.pop();
+    if (node.remove && !node.insideTarget) ranges.push([node.start, token.end]);
+  }
+  let output = xml;
+  for (const [start, end] of ranges.sort((a, b) => b[0] - a[0])) {
+    output = output.slice(0, start) + output.slice(end);
+  }
+  return output;
+}
+
+function makeSourceBackedVideoOnly(xml) {
+  const sourceTags = new Set(["asset-clip", "ref-clip", "mc-clip"]);
+  const replacements = [];
+  for (const token of scanXMLTags(xml)) {
+    if (token.closing || !sourceTags.has(token.name)) continue;
+    let raw = token.raw.replace(/\s+srcEnable="[^"]*"/g, "");
+    const insertAt = token.selfClosing ? raw.lastIndexOf("/") : raw.lastIndexOf(">");
+    raw = raw.slice(0, insertAt) + ' srcEnable="video"' + raw.slice(insertAt);
+    replacements.push([token.start, token.end, raw]);
+  }
+  let output = xml;
+  for (const [start, end, replacement] of replacements.sort((a, b) => b[0] - a[0])) {
+    output = output.slice(0, start) + replacement + output.slice(end);
+  }
+  return output;
+}
+
+async function removeAudioForConform(xml) {
+  const before = summarizeAudioStructures(xml);
+  const stylesheet = `<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+  <xsl:output method="xml" encoding="UTF-8" indent="yes" doctype-system=""/>
+  <xsl:key name="asset-by-id" match="asset" use="@id"/>
+  <xsl:template match="@*|node()">
+    <xsl:copy><xsl:apply-templates select="@*|node()"/></xsl:copy>
+  </xsl:template>
+  <xsl:template match="audio|sync-source|audio-channel-source|audio-role-source|filter-audio|adjust-volume|adjust-panner"/>
+  <xsl:template match="@audioStart|@audioDuration"/>
+  <xsl:template match="asset-clip[key('asset-by-id', @ref)[@hasAudio='1' and not(@hasVideo='1')]]|ref-clip[key('asset-by-id', @ref)[@hasAudio='1' and not(@hasVideo='1')]]|mc-clip[key('asset-by-id', @ref)[@hasAudio='1' and not(@hasVideo='1')]]"/>
+  <xsl:template match="asset-clip">
+    <video>
+      <xsl:copy-of select="@ref|@name|@offset|@start|@duration|@enabled|@lane"/>
+      <xsl:if test="not(@duration) and key('asset-by-id', @ref)/@duration">
+        <xsl:attribute name="duration"><xsl:value-of select="key('asset-by-id', @ref)/@duration"/></xsl:attribute>
+      </xsl:if>
+      <xsl:if test="@videoRole"><xsl:attribute name="role"><xsl:value-of select="@videoRole"/></xsl:attribute></xsl:if>
+      <xsl:apply-templates select="node()[not(self::metadata)]"/>
+    </video>
+  </xsl:template>
+  <xsl:template match="ref-clip|mc-clip">
+    <xsl:copy>
+      <xsl:apply-templates select="@*[name() != 'srcEnable']"/>
+      <xsl:attribute name="srcEnable">video</xsl:attribute>
+      <xsl:apply-templates select="node()"/>
+    </xsl:copy>
+  </xsl:template>
+</xsl:stylesheet>`;
+  const token = crypto.randomUUID();
+  const sourcePath = path.join(os.tmpdir(), `conform_audio_source_${token}.fcpxml`);
+  const stylesheetPath = path.join(os.tmpdir(), `conform_audio_remove_${token}.xsl`);
+  let output = "";
+  try {
+    await fs.writeFile(sourcePath, xml);
+    await fs.writeFile(stylesheetPath, stylesheet);
+    const result = spawnSync("/usr/bin/xsltproc", [stylesheetPath, sourcePath], {
+      encoding: "utf8",
+      maxBuffer: 128 * 1024 * 1024,
+    });
+    if (result.error) throw result.error;
+    if (result.status !== 0 || !trim(result.stdout)) {
+      throw new Error(trim(result.stderr || result.stdout) || "xsltproc audio cleanup failed");
+    }
+    output = result.stdout.replace(/<!DOCTYPE fcpxml SYSTEM "">\s*/i, "<!DOCTYPE fcpxml>\n");
+  } finally {
+    await Promise.allSettled([fs.unlink(sourcePath), fs.unlink(stylesheetPath)]);
+  }
+  const after = summarizeAudioStructures(output);
+  return { xml: output, before, after };
+}
+
 function insertStoryItemIntoClipXML(clipXML, storyXML) {
   const close = clipXML.match(/<\/(clip|asset-clip)>\s*$/);
   if (!close) return clipXML;
@@ -2967,6 +3202,18 @@ function dtdSystemIdentifier(filePath) {
   return `file://${parts.join("/")}`;
 }
 
+function assertWellFormed(xml, label) {
+  const result = spawnSync("xmllint", ["--noout", "-"], {
+    input: xml,
+    encoding: "utf8",
+    maxBuffer: 128 * 1024 * 1024,
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`Malformed XML after ${label}: ${trim(result.stderr || result.stdout)}`);
+  }
+}
+
 async function validateAgainstDTD(xml, version, reportLines) {
   const dtdPath = existingPath(dtdCandidatePaths(version));
   if (!dtdPath) {
@@ -2981,6 +3228,7 @@ async function validateAgainstDTD(xml, version, reportLines) {
   );
   const tempXmlPath = path.join(os.tmpdir(), `conform_prep_validate_${crypto.randomUUID()}.fcpxml`);
 
+  let validationPassed = false;
   try {
     await fs.writeFile(tempXmlPath, xmlWithDTD);
     const result = spawnSync("xmllint", ["--noout", "--loaddtd", "--valid", tempXmlPath], {
@@ -2994,15 +3242,20 @@ async function validateAgainstDTD(xml, version, reportLines) {
       throw new Error(message);
     }
     reportLines.push(`DTD validation: passed (${path.basename(dtdPath)})`);
+    validationPassed = true;
   } catch (error) {
     const message = trim(error?.message || String(error));
     reportLines.push(`DTD validation: failed (${path.basename(dtdPath)})`);
+    reportLines.push(`DTD validation detail: ${message}`);
+    reportLines.push(`DTD failed XML retained at: ${tempXmlPath}`);
     throw new Error(`DTD validation failed. ${message}`);
   } finally {
-    try {
-      await fs.unlink(tempXmlPath);
-    } catch {
-      // Ignore cleanup failures.
+    if (validationPassed) {
+      try {
+        await fs.unlink(tempXmlPath);
+      } catch {
+        // Ignore cleanup failures.
+      }
     }
   }
 }
@@ -3015,6 +3268,8 @@ async function main() {
   const report = [];
   const version = fcpxmlVersion(sourceXml) || "1.12";
 
+  appendAudioInventory(report, "source", summarizeAudioStructures(sourceXml));
+
   let patched = sourceXml;
   const newProjectName = nextConformPrepName(sourceXml);
   patched = replaceProjectName(patched, newProjectName);
@@ -3026,6 +3281,7 @@ async function main() {
   for (let pass = 1; pass <= 2; pass += 1) {
     const flattened = flattenSimpleSyncClips(patched, assets, report, formatFrameDurations);
     patched = flattened.xml;
+    assertWellFormed(patched, `sync flatten pass ${pass}`);
     totalFlattened += flattened.count;
     for (const item of flattened.skipped || []) skippedSyncReasons.add(item);
     if (flattened.count === 0) break;
@@ -3039,23 +3295,39 @@ async function main() {
 
   const renamed = renameSourceBackedNodesByDescendant(patched, assets, report);
   patched = renamed.xml;
+  assertWellFormed(patched, "source-backed rename");
   report.push(`source-backed nodes renamed: ${renamed.count}`);
 
   const normalizedTextStyles = normalizeTitleTextStyleIds(patched, report);
   patched = normalizedTextStyles.xml;
+  assertWellFormed(patched, "text-style normalization");
   report.push(`duplicate text-style-def ids normalized: ${normalizedTextStyles.count}`);
 
   const normalizedNestedTitles = normalizeNestedTitleOffsets(patched, report);
   patched = normalizedNestedTitles.xml;
+  assertWellFormed(patched, "nested-title normalization");
   report.push(`nested title offsets normalized: ${normalizedNestedTitles.count}`);
 
   const strippedUnnamedMarkers = removeUnnamedSourceMarkers(patched);
   patched = strippedUnnamedMarkers.xml;
+  assertWellFormed(patched, "marker cleanup");
   report.push(`unnamed source markers removed: ${strippedUnnamedMarkers.count}`);
 
+  const beforeTitleRelocation = patched;
   const relocatedSiblingTitles = relocateClipLocalSiblingTitles(patched, report);
-  patched = relocatedSiblingTitles.xml;
-  report.push(`clip-local sibling titles relocated: ${relocatedSiblingTitles.count}`);
+  try {
+    assertWellFormed(relocatedSiblingTitles.xml, "title relocation");
+    patched = relocatedSiblingTitles.xml;
+    report.push(`clip-local sibling titles relocated: ${relocatedSiblingTitles.count}`);
+  } catch {
+    patched = beforeTitleRelocation;
+    report.push("clip-local sibling title relocation skipped: generated XML was not well-formed");
+  }
+
+  const audioCleanup = await removeAudioForConform(patched);
+  patched = audioCleanup.xml;
+  appendAudioInventory(report, "before automatic audio removal", audioCleanup.before);
+  appendAudioInventory(report, "final video-only output", audioCleanup.after);
 
   const remainingSync = countMatches(patched, /<sync-clip\b/g);
   const remainingMc = countMatches(patched, /<mc-clip\b/g);
@@ -3072,7 +3344,14 @@ async function main() {
   report.push("- expected clip-count note: a one-frame live segment followed by a hold is emitted as two adjacent clips so Final Cut preserves every visible frame; each occurrence increases the structural clip count by one without adding timeline duration");
   report.push("- multicam flattening and complex retime flattening still need more work");
 
-  await validateAgainstDTD(patched, version, report);
+  try {
+    await validateAgainstDTD(patched, version, report);
+  } catch (error) {
+    await fs.mkdir(path.dirname(args.report), { recursive: true });
+    report.push(`fatal error: ${trim(error?.message || String(error))}`);
+    await fs.writeFile(args.report, report.join("\n") + "\n");
+    throw error;
+  }
 
   await fs.mkdir(path.dirname(args.outputXml), { recursive: true });
   await fs.mkdir(path.dirname(args.report), { recursive: true });

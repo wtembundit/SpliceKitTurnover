@@ -49,7 +49,7 @@ if [ ! -d "$REPO_ROOT/lua/scripts/node_modules/exceljs" ]; then
 fi
 
 rm -rf "$APP_DIR"
-mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources/scripts"
+mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources/scripts" "$CONTENTS/Resources/Motion Templates.localized"
 cp "$BUILD_DIR/Turnover" "$CONTENTS/MacOS/Turnover"
 cp "$REPO_ROOT/lua/scripts/build_conform_prep_fcpxml.mjs" "$CONTENTS/Resources/scripts/"
 cp "$REPO_ROOT/lua/scripts/build_vfx_auto_marker_fcpxml.mjs" "$CONTENTS/Resources/scripts/"
@@ -57,8 +57,10 @@ cp "$REPO_ROOT/lua/scripts/build_vfx_pull_edl.mjs" "$CONTENTS/Resources/scripts/
 cp "$REPO_ROOT/lua/scripts/build_vfx_naming_fcpxml.mjs" "$CONTENTS/Resources/scripts/"
 cp "$REPO_ROOT/lua/scripts/build_vfx_deliveries_fcpxml.mjs" "$CONTENTS/Resources/scripts/"
 cp "$REPO_ROOT/lua/scripts/build_vfx_shot_list_manifest.mjs" "$CONTENTS/Resources/scripts/"
+cp "$REPO_ROOT/lua/scripts/build_data_burn_in_manifest.mjs" "$CONTENTS/Resources/scripts/"
 cp "$REPO_ROOT/lua/scripts/generate_vfx_shot_list_excel.mjs" "$CONTENTS/Resources/scripts/"
 cp "$REPO_ROOT/lua/scripts/prepare_turnover_import_fcpxml.mjs" "$CONTENTS/Resources/scripts/"
+cp -R "$REPO_ROOT/motion-templates/Titles.localized" "$CONTENTS/Resources/Motion Templates.localized/"
 cp -R "$REPO_ROOT/lua/scripts/node_modules" "$CONTENTS/Resources/scripts/"
 rm -rf "$CONTENTS/Resources/scripts/node_modules/exceljs/dist" "$CONTENTS/Resources/scripts/node_modules/@types"
 mkdir -p "$CONTENTS/Resources/runtime"

@@ -168,11 +168,48 @@ function parseFormats(xml) {
   const remember = (attrs) => {
     const id = trim(attrs.id);
     if (!id) return;
-    formats[id] = { id, frameDuration: parseFraction(attrs.frameDuration) };
+    formats[id] = {
+      id,
+      frameDuration: parseFraction(attrs.frameDuration),
+      width: Number.parseInt(attrs.width || "", 10) || 0,
+      height: Number.parseInt(attrs.height || "", 10) || 0,
+      colorSpace: trim(attrs.colorSpace),
+      name: trim(attrs.name),
+    };
   };
   for (const match of xml.matchAll(/<format\s+([^>]*?)\/>/gs)) remember(parseAttrs(match[1]));
   for (const match of xml.matchAll(/<format\s+([^>]*?)>.*?<\/format>/gs)) remember(parseAttrs(match[1]));
   return formats;
+}
+
+function parseCustomMetadata(blob = "") {
+  const picked = new Map();
+  const order = [];
+  for (const match of blob.matchAll(/<md\s+([^>]*?)(?:\/>|>[\s\S]*?<\/md>)/g)) {
+    const attrs = parseAttrs(match[1]);
+    const key = trim(attrs.key);
+    const value = trim(decodeXML(attrs.value));
+    const display = trim(decodeXML(attrs.displayName));
+    const source = trim(attrs.source).toLowerCase();
+    const lowerKey = key.toLowerCase();
+    const lowerDisplay = display.toLowerCase();
+    const shotNote = lowerKey.includes("shot-note") || lowerDisplay.includes("shot-note")
+      || lowerKey.includes("shot_note") || lowerDisplay.includes("shot_note");
+    const custom = source === "custom" || lowerKey.includes("custom") || lowerDisplay.includes("custom");
+    const userNote = lowerKey.includes("note") || lowerDisplay.includes("note") || value.toLowerCase().includes("shot");
+    const score = shotNote ? 100 : (custom && userNote ? 80 : (custom ? 50 : 0));
+    const label = display || key;
+    if (!score || !label || !value) continue;
+    const canonical = label.toLowerCase();
+    const existing = picked.get(canonical);
+    if (existing && existing.score > score) continue;
+    if (!existing) order.push(canonical);
+    picked.set(canonical, { label, value, score });
+  }
+  return order.map((key) => {
+    const item = picked.get(key);
+    return `${item.label}: ${item.value}`;
+  }).join(" | ");
 }
 
 function parseAssets(xml, formatMap) {
@@ -197,6 +234,7 @@ function parseAssets(xml, formatMap) {
       start: parseFraction(attrs.start) ?? 0,
       hasVideo: trim(attrs.hasVideo),
       frameDuration: formatInfo.frameDuration || CONFIG.defaultFrameDuration,
+      customMetadata: parseCustomMetadata(body),
     };
   };
   for (const match of xml.matchAll(/<asset\s+([^>]*?)\/>/gs)) remember(parseAttrs(match[1]));
@@ -236,6 +274,11 @@ function resolveSourceInfo(node, assetMap, body = "") {
   const sourceFilename = asset?.filename || asset?.name || trim(node?.attrs?.name);
   let sourceTcSeconds = node?.start ?? 0;
   if (!node?.attrs?.start && asset?.start != null) sourceTcSeconds = asset.start;
+  const localMetadata = parseCustomMetadata(body);
+  const customMetadata = [localMetadata, trim(asset?.customMetadata)]
+    .filter(Boolean)
+    .filter((value, index, values) => values.indexOf(value) === index)
+    .join(" | ");
   return {
     ref,
     asset,
@@ -244,6 +287,7 @@ function resolveSourceInfo(node, assetMap, body = "") {
     sourceTcSeconds,
     sourceFrameDuration: asset?.frameDuration || CONFIG.defaultFrameDuration,
     sourceTcFormat: trim(node?.attrs?.tcFormat || node?.attrs?._effective_tcFormat || ""),
+    customMetadata,
   };
 }
 
@@ -452,6 +496,7 @@ function buildSegmentRecord(segmentNode, segmentBody, assetMap) {
     sourceOutSeconds: sourceOut,
     sourceFrameDuration: source.sourceFrameDuration || CONFIG.defaultFrameDuration,
     sourceTcFormat: source.sourceTcFormat || "",
+    customMetadata: source.customMetadata || "",
   };
 }
 
@@ -588,6 +633,7 @@ function summarizeSegmentsForWindow(segments, visibleStart, visibleEnd) {
         firstTimelineStart: segment.timelineStart || 0,
         sourceFrameDuration: segment.sourceFrameDuration || CONFIG.defaultFrameDuration,
         sourceTcFormat: segment.sourceTcFormat || "",
+        customMetadata: trim(segment.customMetadata),
       };
       sourceGroups[key] = group;
       sourceOrder.push(key);
@@ -603,6 +649,10 @@ function summarizeSegmentsForWindow(segments, visibleStart, visibleEnd) {
         group.firstInSeconds = segment.sourceInSeconds;
       }
       if ((segment.sourceOutSeconds || 0) > (group.lastOutSeconds || 0)) group.lastOutSeconds = segment.sourceOutSeconds;
+      const metadata = trim(segment.customMetadata);
+      if (metadata && !trim(group.customMetadata).split(" | ").includes(metadata)) {
+        group.customMetadata = [trim(group.customMetadata), metadata].filter(Boolean).join(" | ");
+      }
     }
   }
 
@@ -744,6 +794,7 @@ function collectBodyDetailsForRange(node, body = "", assetMap, visibleStartOverr
       sourceOutSeconds: sourceOut,
       sourceFrameDuration: source.sourceFrameDuration || CONFIG.defaultFrameDuration,
       sourceTcFormat: source.sourceTcFormat || "",
+      customMetadata: source.customMetadata || "",
     });
   };
   if (MEDIA_SEGMENT_LIKE.has(node?.tag)) addSegmentFromNode(node, body);
@@ -799,6 +850,7 @@ function collectBodyDetailsForRange(node, body = "", assetMap, visibleStartOverr
         firstTimelineStart: segment.timelineStart || 0,
         sourceFrameDuration: segment.sourceFrameDuration || CONFIG.defaultFrameDuration,
         sourceTcFormat: segment.sourceTcFormat || "",
+        customMetadata: trim(segment.customMetadata),
       };
       sourceGroups[key] = group;
       sourceOrder.push(key);
@@ -811,6 +863,10 @@ function collectBodyDetailsForRange(node, body = "", assetMap, visibleStartOverr
         if (trim(segment.sourceTcFormat)) group.sourceTcFormat = trim(segment.sourceTcFormat);
       }
       if ((segment.sourceOutSeconds || 0) > (group.lastOutSeconds || 0)) group.lastOutSeconds = segment.sourceOutSeconds;
+      const metadata = trim(segment.customMetadata);
+      if (metadata && !trim(group.customMetadata).split(" | ").includes(metadata)) {
+        group.customMetadata = [trim(group.customMetadata), metadata].filter(Boolean).join(" | ");
+      }
     }
   }
   sourceOrder.sort((a, b) => {
@@ -856,6 +912,7 @@ function collectPullRows(xml, assetMap, timelineFrameDuration, handleFrames, opt
         headHandleFrames: handleFrames,
         tailHandleFrames: handleFrames,
         sourceTcFormat: trim(group.sourceTcFormat),
+        customMetadata: trim(group.customMetadata),
         titleStartSeconds: rowMeta.titleStartSeconds,
         titleDurationSeconds: rowMeta.titleDurationSeconds,
         markerAbsSeconds: rowMeta.markerAbsSeconds,
@@ -1117,6 +1174,8 @@ async function main() {
 }
 
 export {
+  collectGlobalSourceSegments,
+  collectGlobalVfxTitles,
   collectPullRows,
   parseAssets,
   parseFormats,
