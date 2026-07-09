@@ -8,30 +8,26 @@ FCPXML validation note: [FCPXML DTD Safety Layer Notes](./fcpxml-dtd-safety-laye
 
 ## ⚠️ Important Preflight: Prepare A Clean Timeline Copy
 
-**Strong recommendation:** never prepare the master timeline directly. Duplicate it and keep the original unchanged. Conform Prep v1.3.1 produces a video-only result automatically; clearing titles and markers is still recommended when isolating source-flatten behavior.
+**Strong recommendation:** never prepare the master timeline directly. Duplicate it and keep the original unchanged. Detach and delete audio from the duplicate before running Conform Prep when you need a clean video-only conform check. Clearing titles and markers is still recommended when isolating source-flatten behavior.
 
 Recommended steps in Final Cut Pro:
 
 1. Duplicate the timeline/project and keep the original unchanged.
-2. Remove titles and markers when performing a clean flatten test.
-3. Run `Conform Prep` on the duplicate.
-4. Confirm that the generated project is video-only before reviewing flatten accuracy.
+2. Detach audio and delete audio from the duplicate timeline.
+3. Remove titles and markers when performing a clean flatten test.
+4. Run `Conform Prep` on the duplicate.
+5. Confirm that the generated project matches the intended video-only prep before reviewing flatten accuracy.
 
-Conform Prep removes timeline audio, audio-only source items, audio component metadata, J/L timing, and audio effects from its generated project. The source project is never overwritten.
+Conform Prep does not delete timeline audio automatically. This keeps the flattening logic focused on visible picture timing and avoids audio-cleanup edge cases from masking the real sync-clip conversion result. The source project is never overwritten.
 
-### Automatic Video-Only Output
+### Audio Preflight
 
-The removal pass runs after sync-clip flattening and produces a video-only timeline rather than simulating Final Cut Pro's temporary Detach Audio operation. It:
+If audio is left in the timeline, Final Cut Pro may import or display additional connected audio items, J/L timing, secondary storylines, or role-based audio structures that make debugging harder. For the most reliable Conform Prep check:
 
-- converts source-backed timeline items to native video elements
-- remove embedded audio component overrides and J/L-cut attributes
-- remove connected audio clips and audio-only secondary storylines
-- remove audio filters, volume, and panner settings without touching video effects
-- clean empty spines, gaps, and transitions left by removed audio
-- retain audio declarations in resources because they do not create audible timeline items
-- validate the final document against the matching FCPXML DTD
-
-The report records before/after audio inventories and DTD validation details for troubleshooting edge cases.
+- duplicate the timeline
+- detach audio in Final Cut Pro
+- delete timeline audio from the duplicate
+- run Conform Prep after the picture-only structure is clean
 
 `Conform Prep` still preserves titles and markers on a best-effort basis, but these items can introduce Final Cut Pro import behavior that looks like a flattening bug when the underlying source clip conversion is actually correct. If titles or markers are left in the timeline, shifted/missing/extra title or marker behavior should be treated as a separate preservation issue, not as proof that the flattened source timing is wrong.
 

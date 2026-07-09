@@ -21,7 +21,7 @@ Turnover v1.3.1 is a focused reliability and usability update. Standalone and Sp
 
 ## Conform Prep
 
-- Added automatic video-only output that removes timeline audio and converts source-backed timeline items to native video elements.
+- Clarified the Conform Prep preflight: duplicate the timeline, detach audio, and delete audio before running when a clean video-only conform check is required. Conform Prep now keeps audio cleanup out of the flattening pass so picture retime/debug behavior stays isolated.
 - Added stage-level XML checks, DTD diagnostics, and a safe rollback when optional title relocation would produce malformed XML.
 - Preserved source asset metadata for downstream Shot List and EDL workflows.
 

@@ -225,21 +225,44 @@ function collectTopLevelElements(body) {
 function analyzeSimpleSyncClip(body, assets) {
   if (/<sync-clip\b/.test(body) || /<mc-clip\b/.test(body)) return null;
   const top = collectTopLevelElements(body);
-  const spine = top.find((item) => item.tag === "spine");
+  const mediaTags = new Set(["clip", "asset-clip", "ref-clip"]);
+  const isConnectedTitleSpine = (item) => {
+    if (item?.tag !== "spine") return null;
+    const spineOffset = parseTimeValue(item.attrs.offset || "");
+    if (!spineOffset) return false;
+    const children = collectTopLevelElements(item.body);
+    return children.length > 0 && children.every((child) =>
+      child.tag === "title" || child.tag === "gap" || child.tag === "transition"
+    );
+  };
+  const spine = top.find((item) => {
+    if (item.tag !== "spine") return false;
+    const spineItems = collectTopLevelElements(item.body);
+    return spineItems.some((child) => mediaTags.has(child.tag));
+  });
 
   let primary = null;
   let storyItems = [];
   let outerExtras = [];
+  const consumedStoryElements = new Set();
+  let hasConnectedTitleSpine = false;
+  let hasConnectedMediaStory = false;
 
   if (spine) {
     const spineItems = collectTopLevelElements(spine.body);
-    primary = spineItems.find((item) => ["clip", "asset-clip", "ref-clip"].includes(item.tag));
-    storyItems = spineItems.filter(
-      (item) => item !== primary && item.tag !== "gap" && item.tag !== "transition"
-    );
+    primary = spineItems.find((item) => mediaTags.has(item.tag));
+    for (const item of spineItems) {
+      if (item === primary || item.tag === "gap" || item.tag === "transition") continue;
+      if (isConnectedTitleSpine(item)) {
+        consumedStoryElements.add(item);
+        hasConnectedTitleSpine = true;
+        storyItems.push(item);
+      }
+      else storyItems.push(item);
+    }
     outerExtras = top.filter((item) => item !== spine && item.tag !== "gap");
   } else {
-    primary = top.find((item) => ["clip", "asset-clip", "ref-clip"].includes(item.tag));
+    primary = top.find((item) => mediaTags.has(item.tag));
   }
   const storyTags = new Set([
     "audio",
@@ -254,8 +277,23 @@ function analyzeSimpleSyncClip(body, assets) {
     "spine",
   ]);
   if (!spine) {
-    storyItems = top.filter((item) => item !== primary && item.tag !== "gap" && storyTags.has(item.tag));
-    outerExtras = top.filter((item) => item !== primary && item.tag !== "gap" && !storyItems.includes(item));
+    storyItems = [];
+    for (const item of top) {
+      if (item === primary || item.tag === "gap" || !storyTags.has(item.tag)) continue;
+      if (isConnectedTitleSpine(item)) {
+        consumedStoryElements.add(item);
+        hasConnectedTitleSpine = true;
+        storyItems.push(item);
+      }
+      else storyItems.push(item);
+    }
+    outerExtras = top.filter(
+      (item) =>
+        item !== primary &&
+        item.tag !== "gap" &&
+        !storyItems.includes(item) &&
+        !consumedStoryElements.has(item)
+    );
   }
 
   // Safe next step:
@@ -264,8 +302,23 @@ function analyzeSimpleSyncClip(body, assets) {
   if (
     primary &&
     storyItems.length > 0 &&
-    storyItems.every((item) => item.tag === "title")
+    storyItems.every((item) => item.tag === "title" || isConnectedTitleSpine(item))
   ) {
+    outerExtras = [...outerExtras, ...storyItems];
+    storyItems = [];
+  }
+
+  const isConnectedMediaStoryItem = (item) =>
+    item &&
+    ["clip", "asset-clip", "ref-clip", "video"].includes(item.tag) &&
+    trim(item.attrs?.lane || "") !== "";
+
+  if (
+    primary?.tag === "clip" &&
+    storyItems.length > 0 &&
+    storyItems.every((item) => item.tag === "title" || isConnectedTitleSpine(item) || isConnectedMediaStoryItem(item))
+  ) {
+    hasConnectedMediaStory = storyItems.some(isConnectedMediaStoryItem);
     outerExtras = [...outerExtras, ...storyItems];
     storyItems = [];
   }
@@ -290,6 +343,8 @@ function analyzeSimpleSyncClip(body, assets) {
     outerExtras,
     storyItems,
     fromSpine: Boolean(spine),
+    hasConnectedTitleSpine,
+    hasConnectedMediaStory,
   };
 }
 
@@ -325,6 +380,116 @@ function analyzeSyncClipRisk(body) {
     if (!reasons.includes(reason)) reasons.push(reason);
   }
   return reasons;
+}
+
+function buildFlattenedSpineSequenceSyncReplacement(node, body, assets, reportLines) {
+  if (/<sync-clip\b/.test(body) || /<mc-clip\b/.test(body)) return null;
+  const top = collectTopLevelElements(body);
+  const spine = top.find((item) => item.tag === "spine");
+  if (!spine) return null;
+
+  const syncOffset = parseTimeValue(node.attrs.offset || "");
+  const syncStart = parseTimeValue(node.attrs.start || "");
+  const syncDuration = parseTimeValue(node.attrs.duration || "");
+  if (!syncOffset || !syncStart || !syncDuration) return null;
+  const syncEnd = addTime(syncStart, syncDuration);
+
+  const topExtras = top.filter((item) => item !== spine && item.tag !== "gap");
+  const unsupportedOuterStory = topExtras.some((item) =>
+    !(
+      item.tag === "metadata" ||
+      item.tag === "note" ||
+      item.tag === "timeMap" ||
+      item.tag === "object-tracker" ||
+      item.tag.startsWith("adjust-") ||
+      item.tag.startsWith("filter-") ||
+      ["marker", "chapter-marker", "rating", "keyword"].includes(item.tag)
+    )
+  );
+  if (unsupportedOuterStory) return null;
+
+  const mediaTags = new Set(["clip", "asset-clip", "ref-clip", "video"]);
+  const spineItems = collectTopLevelElements(spine.body);
+  const segments = [];
+  for (const item of spineItems) {
+    if (!mediaTags.has(item.tag)) continue;
+    const itemOffset = parseTimeValue(item.attrs.offset || "");
+    const itemDuration = parseTimeValue(item.attrs.duration || "");
+    if (!itemOffset || !itemDuration) continue;
+    const itemEnd = addTime(itemOffset, itemDuration);
+    const overlapStart = compareTime(itemOffset, syncStart) > 0 ? itemOffset : syncStart;
+    const overlapEnd = compareTime(itemEnd, syncEnd) < 0 ? itemEnd : syncEnd;
+    if (compareTime(overlapEnd, overlapStart) <= 0) continue;
+
+    const ref = trim(item.attrs.ref) || findFirstRefInBody(item.body) || findFirstRefInBody(item.xml);
+    const asset = ref ? assets.get(ref) : null;
+    if (!asset?.filename) return null;
+
+    const localDelta = subTime(overlapStart, syncStart);
+    const trimDelta = subTime(overlapStart, itemOffset);
+    const duration = subTime(overlapEnd, overlapStart);
+    const attrs = { ...item.attrs };
+    attrs.offset = formatTimeValue(addTime(syncOffset, localDelta));
+    attrs.duration = formatTimeValue(duration);
+    attrs.name = asset.filename;
+    if (!attrs.format && node.attrs.format) attrs.format = node.attrs.format;
+    if (!attrs.tcFormat && node.attrs.tcFormat) attrs.tcFormat = node.attrs.tcFormat;
+
+    const itemStart = parseTimeValue(item.attrs.start || "");
+    if (itemStart) attrs.start = formatTimeValue(addTime(itemStart, trimDelta));
+    else attrs.start = formatTimeValue(overlapStart);
+
+    const itemBuckets = classifyTopLevelElements(collectTopLevelElements(item.body));
+    const outerBuckets = classifyTopLevelElements(topExtras);
+    const storyBaseOld = parseTimeValue(item.attrs.start || "") ? item.attrs.start : item.attrs.offset;
+    const storyBaseNew = attrs.start;
+    const rebasedStory = (itemBuckets.story || []).map((xml) =>
+      /^<(?:video|audio|clip|asset-clip|ref-clip)\b/.test(trim(xml))
+        ? rebaseMediaStoryItemXML(xml, storyBaseOld, storyBaseNew)
+        : rebaseStoryItemXML(xml, storyBaseOld, storyBaseNew)
+    );
+    const rebasedMarkers = [
+      ...(itemBuckets.markersAndKeywords || []),
+      ...(outerBuckets.markersAndKeywords || []),
+    ]
+      .filter((xml) => !isUnnamedSourceMarkerXML(xml))
+      .map((xml) => clampMarkerOrKeywordXMLToClip(
+        rebaseMarkerOrKeywordXML(xml, storyBaseOld, storyBaseNew),
+        attrs.start,
+        attrs.duration
+      ));
+    const nestedParts = [
+      ...(itemBuckets.notes || []),
+      ...(itemBuckets.timeMaps || []),
+      ...dedupeXMLItems([
+        ...(outerBuckets.objectTrackers || []),
+        ...(itemBuckets.objectTrackers || []),
+      ]),
+      ...mergeIntrinsicElements(itemBuckets, outerBuckets),
+      ...rebasedStory,
+      ...dedupeXMLItems(rebasedMarkers),
+      ...(itemBuckets.audioComp || []),
+      ...(outerBuckets.audioComp || []),
+      ...(itemBuckets.filters || []),
+      ...(outerBuckets.filters || []),
+    ];
+    const metadata = mergeMetadataBodies([
+      ...(itemBuckets.metadata || []),
+      ...(outerBuckets.metadata || []),
+    ]);
+    if (metadata) nestedParts.push(metadata);
+
+    segments.push({
+      xml: `${buildElementOpenTag(item.tag, attrs)}\n${nestedParts.filter(Boolean).join("\n")}\n</${item.tag}>`,
+      name: asset.filename,
+    });
+  }
+
+  if (segments.length === 0) return null;
+  reportLines.push(
+    `flattened sync-clip spine sequence: ${trim(node.attrs.name) || "(unnamed sync-clip)"} => ${segments.map((s) => s.name).join(", ")}`
+  );
+  return segments.map((segment) => segment.xml).join("\n");
 }
 
 function classifyTopLevelElements(elements) {
@@ -967,6 +1132,13 @@ function mapInnerTimeToOuterValue(innerTime, primaryOffset, primaryStart) {
   return addTime(primaryOffset, subTime(innerTime, primaryStart));
 }
 
+function mapOuterValueToNestedSourceValue(outerValue, innerPoints, primaryOffset, primaryStart) {
+  if (!outerValue || !innerPoints?.length || !primaryOffset || !primaryStart) return null;
+  const innerTime = mapOuterValueToInnerTime(outerValue, primaryOffset, primaryStart);
+  if (!innerTime) return null;
+  return interpolateTimeMap(innerPoints, innerTime);
+}
+
 function deriveVisibleSourceStartFromNested(outerPoints, innerPoints, primaryOffset, primaryStart, syncStart) {
   if (!outerPoints?.length || !innerPoints?.length || !primaryOffset || !primaryStart || !syncStart) {
     return null;
@@ -985,6 +1157,41 @@ function deriveVisibleInnerTimeFromNested(outerPoints, primaryOffset, primarySta
   const outerVisibleValue = interpolateTimeMap(outerPoints, syncStart);
   if (!outerVisibleValue) return null;
   return mapOuterValueToInnerTime(outerVisibleValue, primaryOffset, primaryStart);
+}
+
+function deriveVisibleAssetClipSourceValueFromNested(outerPoints, innerPoints, primaryOffset, primaryStart, syncStart) {
+  if (!outerPoints?.length || !innerPoints?.length || !syncStart) {
+    return null;
+  }
+  const outerVisibleValue = interpolateTimeMap(outerPoints, syncStart);
+  if (!outerVisibleValue) return null;
+  return mapOuterValueToNestedSourceValue(
+    outerVisibleValue,
+    innerPoints,
+    primaryOffset,
+    primaryStart
+  );
+}
+
+function deriveVisibleAssetClipTimeFromNested(outerPoints, innerPoints, primaryOffset, primaryStart, syncStart, composedPoints = null) {
+  const visibleSourceValue = deriveVisibleAssetClipSourceValueFromNested(
+    outerPoints,
+    innerPoints,
+    primaryOffset,
+    primaryStart,
+    syncStart
+  );
+  if (!visibleSourceValue) return null;
+  if (composedPoints?.length >= 2) {
+    const solvedVisibleTimes = solveOuterTimeForValue(composedPoints, visibleSourceValue);
+    if (solvedVisibleTimes.length) return solvedVisibleTimes[0];
+  }
+  const solvedInnerTimes = solveOuterTimeForValue(innerPoints, visibleSourceValue);
+  if (solvedInnerTimes.length) return solvedInnerTimes[0];
+  if (primaryOffset && primaryStart) {
+    return mapOuterValueToInnerTime(visibleSourceValue, primaryOffset, primaryStart);
+  }
+  return null;
 }
 
 function deriveVisibleSourceEndFromNested(outerPoints, innerPoints, primaryOffset, primaryStart, syncStart, syncDuration) {
@@ -1017,6 +1224,47 @@ function scaleInnerTimeMapByOuterRate(innerPoints, outerPoints) {
       value: addTime(innerFirst.value, mulTime(relativeValue, outerRate)),
     };
   });
+}
+
+function composeAssetClipNestedTimeMapsPreservingOuterPoints(outerPoints, innerPoints, primaryOffset, primaryStart) {
+  if (!outerPoints?.length || !innerPoints?.length) return [];
+  if (innerPoints.length < 2 || outerPoints.length < 2) return [];
+
+  const composed = [];
+  for (const outerPoint of outerPoints) {
+    let innerTime = null;
+    let innerValue = null;
+
+    // Preserve the outer sync time axis, but convert its value through the
+    // primary asset's timeMap. This models the manual operation: break apart the
+    // sync clip, then multiply the inner conform-rate retime by the sync retime.
+    if (primaryOffset && primaryStart) {
+      innerTime = outerPoint.time;
+      innerValue = mapOuterValueToNestedSourceValue(
+        outerPoint.value,
+        innerPoints,
+        primaryOffset,
+        primaryStart
+      );
+    }
+    if (!innerValue) {
+      const solvedByOuterValue = solveOuterTimeForValue(innerPoints, outerPoint.value);
+      if (solvedByOuterValue.length) {
+        innerTime = solvedByOuterValue[0];
+        innerValue = outerPoint.value;
+      }
+    }
+    if (!innerTime || !innerValue) continue;
+
+    composed.push({
+      time: innerTime,
+      value: innerValue,
+      interp: outerPoint.interp || "smooth2",
+      inTime: outerPoint.inTime || null,
+      outTime: outerPoint.outTime || null,
+    });
+  }
+  return dedupeTimePoints(composed);
 }
 
 function alignAssetClipTimeMapValueToVisibleStart(points, clipStart) {
@@ -1702,6 +1950,12 @@ function replaceAttrInXML(xml, attrName, newValue) {
   return xml;
 }
 
+function setAttrInXML(xml, attrName, newValue) {
+  const regex = new RegExp(`\\b${attrName}="[^"]*"`);
+  if (regex.test(xml)) return xml.replace(regex, `${attrName}="${escapeAttr(newValue)}"`);
+  return xml.replace(/^<([\w:-]+)\b/, `<$1 ${attrName}="${escapeAttr(newValue)}"`);
+}
+
 function rebaseMarkerOrKeywordXML(xml, oldBaseValue, newBaseValue) {
   if (!oldBaseValue || !newBaseValue) return xml;
   const oldBase = parseTimeValue(oldBaseValue);
@@ -1760,6 +2014,19 @@ function rebaseStoryItemXML(xml, oldBaseValue, newBaseValue) {
   if (!current) return xml;
   const shifted = addTime(newBase, subTime(current, oldBase));
   return replaceAttrInXML(xml, "offset", formatTimeValue(shifted));
+}
+
+function rebaseMediaStoryItemXML(xml, oldBaseValue, newBaseValue) {
+  if (!oldBaseValue || !newBaseValue) return xml;
+  const oldBase = parseTimeValue(oldBaseValue);
+  const newBase = parseTimeValue(newBaseValue);
+  if (!oldBase || !newBase) return xml;
+  return xml.replace(/\b(offset|start)="([^"]*)"/g, (match, attrName, timeValue) => {
+    const current = parseTimeValue(timeValue);
+    if (!current) return match;
+    const shifted = addTime(newBase, subTime(current, oldBase));
+    return `${attrName}="${escapeAttr(formatTimeValue(shifted))}"`;
+  });
 }
 
 function outerTitlesCanAnchorWithinClipWindow(titleXmlItems, clipOffsetValue, clipDurationValue) {
@@ -2003,6 +2270,20 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
       const body = xml.slice(node.openEnd, token.start);
       const analyzed = analyzeSimpleSyncClip(body, assets);
       if (!analyzed) {
+        const spineSequenceReplacement = buildFlattenedSpineSequenceSyncReplacement(
+          node,
+          body,
+          assets,
+          reportLines
+        );
+        if (spineSequenceReplacement) {
+          replacements.push({
+            start: node.openStart,
+            end: token.end,
+            replacement: spineSequenceReplacement,
+          });
+          continue;
+        }
         const reasons = analyzeSyncClipRisk(body);
         if (reasons.length > 0) {
           skipped.push(`${trim(node.attrs.name) || "(unnamed sync-clip)"}\t${reasons.join(",")}`);
@@ -2080,10 +2361,20 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
           debugDescribePointsRelative(primaryTimeMapPoints, "primary vs clip.start", primaryStartValue, syncStartValue || primaryStartValue).forEach((line) => reportLines.push(line));
         }
       }
-      const allowAssetClipNestedRetime =
+      const isKnownAssetClipNestedRetime =
         hasNestedRetimes &&
         primaryTag === "asset-clip" &&
         allowedAssetClipNestedRetimeSyncCases.has(trim(node.attrs.name) || "");
+      const canUseGenericAssetClipNestedRetime =
+        hasNestedRetimes &&
+        primaryTag === "asset-clip" &&
+        primaryTimeMapPoints.length === 2 &&
+        outerTimeMapPoints.length >= 2 &&
+        (outerBuckets.story || []).every((xml) =>
+          trim(xml).startsWith("<title") || trim(xml).startsWith("<spine")
+        );
+      const allowAssetClipNestedRetime =
+        isKnownAssetClipNestedRetime || canUseGenericAssetClipNestedRetime;
       if (hasNestedRetimes && primaryTag === "asset-clip" && !allowAssetClipNestedRetime) {
         if (assetClipOuterSpeedCandidates.has(trim(node.attrs.name) || "")) {
           reportLines.push(`asset-clip outer-speed candidate: ${trim(node.attrs.name) || newName}`);
@@ -2114,12 +2405,14 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
         outputTag = "clip";
         delete attrs.ref;
       }
+      if (canUseGenericAssetClipNestedRetime && !isKnownAssetClipNestedRetime) {
+        reportLines.push(`generic asset-clip nested-retime: ${trim(node.attrs.name) || newName} => ${analyzed.asset.filename}`);
+      }
       if (node.attrs.duration != null && node.attrs.duration !== "") attrs.duration = node.attrs.duration;
       if (!attrs.format && node.attrs.format) attrs.format = node.attrs.format;
       if (!attrs.tcFormat && node.attrs.tcFormat) attrs.tcFormat = node.attrs.tcFormat;
       attrs.name = newName;
       if (outputTag === "clip") delete attrs.ref;
-      const wrappedPrimaryStory = [];
       const hoistedPrimaryBuckets = primaryBuckets;
       const keepPrimaryStoryInside =
         !(outputTag === "asset-clip" && primaryTag !== "asset-clip");
@@ -2135,8 +2428,19 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
       );
       const keepTitlesInsideAssetClip =
         outputTag === "asset-clip" &&
+        !analyzed.hasConnectedTitleSpine &&
         (outerBuckets.story || []).length > 0 &&
         (outerBuckets.story || []).every((xml) => xml.startsWith("<title"));
+      const hasConnectedSpineStory =
+        analyzed.hasConnectedTitleSpine &&
+        (outerBuckets.story || []).some((xml) => trim(xml).startsWith("<spine"));
+      const keepConnectedSpineInsideFlattenedClip =
+        hasConnectedSpineStory &&
+        ["asset-clip", "clip", "video"].includes(outputTag);
+      const keepConnectedMediaStoryInsideFlattenedClip =
+        analyzed.hasConnectedMediaStory &&
+        !hasNestedRetimes &&
+        outputTag === "clip";
       const hasOuterEditorialBundleOnNestedClip =
         hasNestedRetimes &&
         analyzed.fromSpine &&
@@ -2160,6 +2464,7 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
         );
       const keepOuterStoryInsideClip =
         outputTag === "clip" &&
+        !analyzed.hasConnectedTitleSpine &&
         (outerBuckets.story || []).length > 0 &&
         (forceSimpleSyncTitleBundleInsideClip ||
           (
@@ -2195,7 +2500,15 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
         primaryTag === "asset-clip" &&
         outputTag === "asset-clip"
       ) {
-        composedTimeMapPoints = scaleInnerTimeMapByOuterRate(primaryTimeMapPoints, outerTimeMapPoints);
+        composedTimeMapPoints =
+          canUseGenericAssetClipNestedRetime && !isKnownAssetClipNestedRetime
+            ? composeAssetClipNestedTimeMapsPreservingOuterPoints(
+                outerTimeMapPoints,
+                primaryTimeMapPoints,
+                primaryOffsetValue,
+                primaryStartValue
+              )
+            : scaleInnerTimeMapByOuterRate(primaryTimeMapPoints, outerTimeMapPoints);
       }
       if (
         hasNestedRetimes &&
@@ -2380,12 +2693,22 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
       // visible frame of the original clip inside the sync-clip, not the raw
       // asset start nor the sync-clip's own start value.
       if (allowAssetClipNestedRetime) {
-        const derivedVisibleInnerStart = deriveVisibleInnerTimeFromNested(
-          outerTimeMapPoints,
-          primaryOffsetValue,
-          primaryStartValue,
-          syncStartValue
-        );
+        const derivedVisibleInnerStart =
+          canUseGenericAssetClipNestedRetime && !isKnownAssetClipNestedRetime
+            ? deriveVisibleAssetClipTimeFromNested(
+                outerTimeMapPoints,
+                primaryTimeMapPoints,
+                primaryOffsetValue,
+                primaryStartValue,
+                syncStartValue,
+                composedTimeMapPoints
+              )
+            : deriveVisibleInnerTimeFromNested(
+                outerTimeMapPoints,
+                primaryOffsetValue,
+                primaryStartValue,
+                syncStartValue
+              );
         if (derivedVisibleInnerStart) {
           attrs.start = formatTimeValue(quantizeTime(derivedVisibleInnerStart, 48n));
         }
@@ -2413,14 +2736,18 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
         outputTag === "asset-clip"
       ) {
         const clipStartValue = parseTimeValue(attrs.start || "");
-        composedTimeMapPoints = alignAssetClipTimeMapValueToVisibleStart(
-          composedTimeMapPoints,
-          clipStartValue
-        );
-        composedTimeMapPoints = applySC22AssetClipHeadCalibration(
-          composedTimeMapPoints,
-          attrs.name || ""
-        );
+        if (canUseGenericAssetClipNestedRetime && !isKnownAssetClipNestedRetime) {
+          composedTimeMapPoints = quantizeTimeMapPoints(composedTimeMapPoints, 2400n);
+        } else {
+          composedTimeMapPoints = alignAssetClipTimeMapValueToVisibleStart(
+            composedTimeMapPoints,
+            clipStartValue
+          );
+          composedTimeMapPoints = applySC22AssetClipHeadCalibration(
+            composedTimeMapPoints,
+            attrs.name || ""
+          );
+        }
       }
       const effectiveTimeMapXML =
         composedTimeMapPoints.length >= 2
@@ -2466,7 +2793,12 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
               return buildTimeMapXML(quantizeTimeMapPoints(visibleOuterOnlyPoints, 2400n));
             })()
           : null;
-      if (keepTitlesInsideAssetClip || keepOuterStoryInsideClip) {
+      if (
+        keepTitlesInsideAssetClip ||
+        keepOuterStoryInsideClip ||
+        keepConnectedSpineInsideFlattenedClip ||
+        keepConnectedMediaStoryInsideFlattenedClip
+      ) {
         nestedStoryBase = attrs.start;
       }
 
@@ -2553,9 +2885,14 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
             intrinsic: includeOuterIntrinsicOnNestedClip ? rebasedOuterIntrinsic : [],
           }
         ),
-        ...(keepPrimaryStoryInside ? wrappedPrimaryStory : []),
         ...(keepPrimaryStoryInside ? hoistedPrimaryBuckets.story : []),
-        ...(keepTitlesInsideAssetClip || keepOuterStoryInsideClip || forceOuterTitlesInsideKnownNested ? rebasedOuterTitles : []),
+        ...(keepTitlesInsideAssetClip ||
+          keepOuterStoryInsideClip ||
+          forceOuterTitlesInsideKnownNested ||
+          keepConnectedSpineInsideFlattenedClip ||
+          keepConnectedMediaStoryInsideFlattenedClip
+          ? rebasedOuterTitles
+          : []),
         ...rebasedGenericOuterTitlesInside,
         ...dedupedPrimaryMarkers,
         ...dedupedOuterMarkers,
@@ -2573,7 +2910,11 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
 
       const rebuiltBody = nestedParts.join("\n");
 
-      const trailingStorySource = keepTitlesInsideAssetClip || keepOuterStoryInsideClip || forceOuterTitlesInsideKnownNested
+      const trailingStorySource = keepTitlesInsideAssetClip ||
+        keepOuterStoryInsideClip ||
+        forceOuterTitlesInsideKnownNested ||
+        keepConnectedSpineInsideFlattenedClip ||
+        keepConnectedMediaStoryInsideFlattenedClip
         ? [...storyBuckets.story].filter(Boolean)
         : [
             ...storyBuckets.story,
@@ -3036,14 +3377,14 @@ async function removeAudioForConform(xml) {
   <xsl:template match="@audioStart|@audioDuration"/>
   <xsl:template match="asset-clip[key('asset-by-id', @ref)[@hasAudio='1' and not(@hasVideo='1')]]|ref-clip[key('asset-by-id', @ref)[@hasAudio='1' and not(@hasVideo='1')]]|mc-clip[key('asset-by-id', @ref)[@hasAudio='1' and not(@hasVideo='1')]]"/>
   <xsl:template match="asset-clip">
-    <video>
-      <xsl:copy-of select="@ref|@name|@offset|@start|@duration|@enabled|@lane"/>
+    <asset-clip>
+      <xsl:apply-templates select="@*[name() != 'srcEnable' and name() != 'audioRole']"/>
       <xsl:if test="not(@duration) and key('asset-by-id', @ref)/@duration">
         <xsl:attribute name="duration"><xsl:value-of select="key('asset-by-id', @ref)/@duration"/></xsl:attribute>
       </xsl:if>
-      <xsl:if test="@videoRole"><xsl:attribute name="role"><xsl:value-of select="@videoRole"/></xsl:attribute></xsl:if>
-      <xsl:apply-templates select="node()[not(self::metadata)]"/>
-    </video>
+      <xsl:attribute name="srcEnable">video</xsl:attribute>
+      <xsl:apply-templates select="node()"/>
+    </asset-clip>
   </xsl:template>
   <xsl:template match="ref-clip|mc-clip">
     <xsl:copy>
@@ -3278,7 +3619,8 @@ async function main() {
 
   let totalFlattened = 0;
   const skippedSyncReasons = new Set();
-  for (let pass = 1; pass <= 2; pass += 1) {
+  const maxSyncFlattenPasses = 8;
+  for (let pass = 1; pass <= maxSyncFlattenPasses; pass += 1) {
     const flattened = flattenSimpleSyncClips(patched, assets, report, formatFrameDurations);
     patched = flattened.xml;
     assertWellFormed(patched, `sync flatten pass ${pass}`);
@@ -3324,10 +3666,8 @@ async function main() {
     report.push("clip-local sibling title relocation skipped: generated XML was not well-formed");
   }
 
-  const audioCleanup = await removeAudioForConform(patched);
-  patched = audioCleanup.xml;
-  appendAudioInventory(report, "before automatic audio removal", audioCleanup.before);
-  appendAudioInventory(report, "final video-only output", audioCleanup.after);
+  const finalAudioInventory = summarizeAudioStructures(patched);
+  appendAudioInventory(report, "final output audio inventory", finalAudioInventory);
 
   const remainingSync = countMatches(patched, /<sync-clip\b/g);
   const remainingMc = countMatches(patched, /<mc-clip\b/g);
@@ -3338,6 +3678,7 @@ async function main() {
     for (const name of listRemainingSyncClipNames(patched)) report.push(`- ${name}`);
   }
   report.push("notes:");
+  report.push("- IMPORTANT: Conform Prep no longer deletes timeline audio automatically. Duplicate the timeline, detach audio, and delete audio manually before running when you need a clean video-only conform check.");
   report.push("- IMPORTANT: For clean flatten validation, clear editorial titles/markers before running Conform Prep when possible. Existing titles/markers can be preserved best-effort, but they can also create import-side noise that hides the real flattening result.");
   report.push("- v1 flattens simple sync-clips conservatively");
   report.push("- v1 renames source-backed clips to source filenames");

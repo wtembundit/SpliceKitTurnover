@@ -169,7 +169,7 @@ Project-level fields and clip-level fields remain separate groups. Project field
 - A preset stores layout and rules, never project-specific resolved values
 - Ship a small set of defaults: `Editorial Review`, `VFX Review`, `Source QC`, and `Audio Review`
 
-## Scope for v1.3.2
+## Future Scope
 
 The first implementation should prove the data and interaction model without committing to the final renderer:
 

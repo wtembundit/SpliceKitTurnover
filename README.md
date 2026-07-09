@@ -26,6 +26,7 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 - [VFX Row Resolver Contract](docs/vfx-row-resolver-contract.md): implementation note for keeping VFX tools aligned.
 - [Visible Timeline Resolver Future Plan](docs/visible-timeline-resolver-future.md): parity-first plan for sharing visible marker logic safely.
 - [Standalone Guide](standalone/TurnoverApp/README.md): standalone installation, input methods, Shot List reference-movie workflow, cache, and limitations.
+- [Release Notes v1.3.2](docs/release-notes-v1.3.2.md): current Conform Prep reliability and preflight policy update.
 - [Release Notes v1.3.0](docs/release-notes-v1.3.0.md): standalone application and synchronized dual-edition release.
 - [Release Notes v1.2.2](docs/release-notes-v1.2.2.md): current Conform Prep title-anchor and spatial-conform regression fix.
 - [Release Notes v1.2.1](docs/release-notes-v1.2.1.md): update checker, portable Shot List runtime, and thumbnail layout improvements.

@@ -180,7 +180,7 @@ struct ContentView: View {
     private var requirementText: String {
         switch model.selectedTool {
         case .conformPrep:
-            "Flattens sync clips, retains supported timeline attributes, and creates a video-only result. Always use a duplicate timeline."
+            "Flattens sync clips and retains supported timeline attributes. Use a duplicate timeline, then detach and delete audio first for clean conform checks."
         case .vfxNaming:
             "Requires the VFX Naming Motion title template. Auto Number works on VFX naming titles already placed in the timeline."
         case .autoMarker:
@@ -235,7 +235,7 @@ struct ContentView: View {
         HStack(spacing: 12) {
             switch model.selectedTool {
             case .conformPrep:
-                Text("Flattens sync clips to source media while retaining retiming, transforms, and key clip attributes.")
+                Text("Flatten sync clips to source media. Recommended preflight: duplicate the timeline, detach audio, and delete audio before running.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             case .autoMarker:
