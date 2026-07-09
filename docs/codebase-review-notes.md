@@ -32,6 +32,14 @@ This review is useful, but not every item should become immediate work. Current 
 
 - **B2 and U3** belong with the Data Burn-In future plan. The prototype needs a larger design pass before we tune dedup keys or preview styling in isolation.
 
+### Future Runtime / App Size Plan
+
+- The standalone app should keep bundling Node.js for now. The current priority is that users can run Turnover without installing or configuring Node themselves.
+- The preferred future size optimization is the Bun/self-contained engine plan in `standalone-optimization-plan.md`: compile the existing JavaScript FCPXML scripts into a compact `turnover-engine` while keeping JavaScript as the single source of truth.
+- Do not rewrite the FCPXML core in Swift just to reduce app size. That would create two logic paths and increase the chance that the standalone and SpliceKit editions drift apart.
+- Treat the Bun engine as a separate release spike after smoke tests cover Conform Prep, Auto Marker, VFX Naming, VFX Pull EDL, VFX Timeline, and VFX Shot List.
+- Success criteria: outputs match the current Node runtime byte-for-byte or semantically, the standalone app runs without user-installed Node.js, and the SpliceKit plugin edition remains compatible with the shared scripts.
+
 ---
 
 ## Architecture & Maintainability
@@ -48,6 +56,8 @@ This review is useful, but not every item should become immediate work. Current 
 The plugin installer (`resolve_node()`) additionally searches `~/.volta/bin/node`, `~/.asdf/shims/node`, `/opt/local/bin/node`, `/usr/local/opt/node/bin/node`, and `~/.nvm/versions/*/bin/node`.
 
 **Suggestion:** Align the search paths. If a user manages Node.js via Volta or nvm and uses the standalone app without the plugin, they will see "Node.js not found" despite Node.js being fully installed. Consider also adding `command -v node` as a PATH-based fallback (the installer already uses this).
+
+**Team note:** This remains useful only while the standalone app has a Node fallback path. If the future Bun/self-contained engine plan ships, the app should no longer depend on user-installed Node.js at all.
 
 ---
 
