@@ -385,6 +385,37 @@ The resolver should:
 
 Long-term direction: share the stronger Conform Prep retime/time-domain model instead of maintaining parallel resolver rules.
 
+## Multicam Status
+
+Current status:
+
+- Data Burn-In does not support multicam at release-quality accuracy yet.
+- Turnover can see some `mc-clip`-shaped timeline items in FCPXML, but it does not yet fully resolve the active multicam angle back to the exact underlying angle source for every frame.
+- Source filename, source timecode, source frame, source metadata, connected layer details, retime, and keyframed transform values can be wrong or incomplete on multicam edits.
+- Do not recommend Data Burn-In for user-facing multicam turnover yet. If a project contains multicam clips, treat Burn-In output as a preview/debug aid, not a reliable editorial or VFX reference.
+- The same caution applies to SpliceKit one-click transparent export, because it uses the shared Burn-In resolver.
+
+Recommended current workaround:
+
+- Flatten multicam clips before running Data Burn-In.
+- A practical external option is [Automatic Duck Multicam Flattener](https://www.automaticduck.com/#multicam-flattener), which is designed to flatten Final Cut Pro multicam clips to the selected source media. After flattening, export or send the resulting timeline to Turnover and run Burn-In normally.
+- This workaround is preferable for release users because Turnover's current resolver is strongest on ordinary timeline clips, connected clips, sync clips, retime, keyframes, and metadata after the visible source has already been made explicit.
+
+Research-backed future direction:
+
+- Apple's FCPXML model stores multicam media as a `media` resource containing `multicam` and one or more `mc-angle` timelines. A project timeline uses `mc-clip` to reference that multicam media. Newer FCPXML versions use `mc-source` entries to choose which angle supplies video and/or audio.
+- A proper resolver needs to enter `mc-clip`, find its referenced `media > multicam`, choose the active video angle from `mc-source` or legacy `videoAngleID`, then resolve the selected `mc-angle` timeline using the same rational time and nested timeMap rules as normal clips.
+- After the selected angle is resolved, Burn-In should report the underlying angle source as the visible source while keeping the parent `mc-clip` available as context when useful.
+- Audio angle selection should be handled separately from video angle selection. Burn-In visual source data must follow the active video angle, not an audio-only angle.
+- Connected-layer display should remain scoped to real connected video layers above the visible sequence timeline. Internal lanes inside a primary multicam angle should not be reported as external connected layers unless the user explicitly asks for multicam-angle diagnostics in a future UI.
+- Fixture work is required before claiming support: at minimum, one multicam with two video angles, one angle switch, separate audio/video angles, retime on an `mc-clip`, retime inside an angle, and metadata on the underlying angle asset.
+
+Primary references:
+
+- Apple Developer Documentation: [Multicam Media](https://developer.apple.com/documentation/professional-video-applications/multicam-media)
+- Apple legacy DTD references: [FCPXML Version 1.6 DTD](https://developer.apple.com/library/archive/documentation/Miscellaneous/Conceptual/LegacyDTDsFinalCutPro/FCPXMLDTDv1.6/FCPXMLDTDv1.6.html) and [FCPXML Version 1.7 DTD](https://developer.apple.com/library/archive/documentation/Miscellaneous/Conceptual/LegacyDTDsFinalCutPro/FCPXMLDTDv1.7/FCPXMLDTDv1.7.html)
+- Practical timing notes: [FCP Cafe FCPXML examples](https://fcp.cafe/developers/fcpxml/)
+
 ## Release Scope
 
 For the next release, Data Burn-In should include:
@@ -411,6 +442,7 @@ Out of scope for this release:
 
 - Preview timecode may still lag slightly during playback; export output is the accuracy target for release.
 - Retime and keyframed transform parsing needs fixture-backed regression coverage.
+- Multicam is not release-quality yet; do not present it as supported until a dedicated `mc-clip`/`mc-angle` resolver and fixture suite exist.
 - Conditions are still mostly audio-role oriented; future conditions should support source, metadata, and analysis fields generically.
 - ProRes burned-in export remains deferred until audio/container behavior is reliable.
 - Export size estimates need calibration per codec, container, duration, and alpha/burned-in mode.
@@ -474,6 +506,7 @@ Create minimized, non-confidential fixtures before release candidates:
 - primary-only shot with no connected layers
 - primary plus one connected video layer
 - primary plus multiple connected layers
+- multicam `mc-clip` with active video angle, angle switches, split audio/video angle, retime, and metadata
 - selected custom metadata keys present/missing
 - audio-role condition present/missing
 - transparent export range

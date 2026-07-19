@@ -44,5 +44,6 @@ Turnover v1.4.0 is a larger workflow release for both the standalone app and the
 ## Release Scope Notes
 
 - Burned-in ProRes reference export is intentionally deferred. Transparent ProRes 4444 overlay export is enabled, but burned-in ProRes with audio still needs more container/audio investigation.
+- Multicam `mc-clip` timelines are not supported at release-quality accuracy yet. For multicam projects, flatten multicam clips before running Data Burn-In; Turnover's current resolver should not be used as a reliable source/timecode reference for active multicam angles.
 - Preview timecode can still feel slightly less fluid during playback on heavy timelines. Export output remains the accuracy target.
 - Complex, previously unseen FCPXML retime and connected-layer shapes should still be reported with reduced reproducible examples.
