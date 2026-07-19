@@ -22,11 +22,13 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 ## Documentation
 
 - [Turnover Tools Guide](docs/turnover-tools.md): detailed workflow descriptions and usage notes.
+- [Data Burn-In Guide](docs/data-burn-in.md): standalone and SpliceKit Burn-In workflows, presets, export modes, implementation map, and release checklist.
 - [Conform Prep Guide](docs/conform-prep.md): detailed explanation of sync-clip flattening, retime math, speed ramps, titles, markers, transforms, metadata, and known limits.
 - [VFX Row Resolver Contract](docs/vfx-row-resolver-contract.md): implementation note for keeping VFX tools aligned.
 - [Visible Timeline Resolver Future Plan](docs/visible-timeline-resolver-future.md): parity-first plan for sharing visible marker logic safely.
 - [Standalone Guide](standalone/TurnoverApp/README.md): standalone installation, input methods, Shot List reference-movie workflow, cache, and limitations.
-- [Release Notes v1.3.2](docs/release-notes-v1.3.2.md): current Conform Prep reliability and preflight policy update.
+- [Release Notes v1.4.0](docs/release-notes-v1.4.0.md): Data Burn-In Customizer, transparent overlay export, Marker Export, and SpliceKit Burn-In integration.
+- [Release Notes v1.3.2](docs/release-notes-v1.3.2.md): Conform Prep reliability and preflight policy update.
 - [Release Notes v1.3.0](docs/release-notes-v1.3.0.md): standalone application and synchronized dual-edition release.
 - [Release Notes v1.2.2](docs/release-notes-v1.2.2.md): current Conform Prep title-anchor and spatial-conform regression fix.
 - [Release Notes v1.2.1](docs/release-notes-v1.2.1.md): update checker, portable Shot List runtime, and thumbnail layout improvements.
@@ -35,12 +37,14 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
 ## Tools
 
 - `Conform Prep`: flatten and prepare timelines for online conform.
+- `Data Burn-In`: build customizable burn-ins, export transparent overlays, or export H.264/HEVC burned-in review movies.
 - `VFX Auto Naming`: number `VFX NAMING` titles.
 - `VFX Reset Naming`: reset numbered VFX titles back to placeholders.
 - `VFX Auto Marker`: create standard, to-do, or chapter markers from VFX titles.
 - `VFX Shot List`: capture thumbnails and build an Excel shot list.
 - `VFX Pull EDL`: build a source pull EDL with per-side handle frames.
 - `VFX Timeline`: place returned VFX renders back into the timeline.
+- `Marker Export`: export Final Cut Pro markers as EDL, CSV, or TXT.
 
 ## SpliceKit Plugin Requirements
 
@@ -50,6 +54,8 @@ If a timeline fails or imports with missing/shifted elements, keep the original 
   GitHub release bundle includes a prebuilt native plugin.
 - Node.js. The installer detects common Homebrew, nvm, Volta, asdf, MacPorts, and shell paths automatically. If Node.js is missing and Homebrew is available, the installer can install it for you.
 - Screen Recording permission for the patched Final Cut Pro process if you use `VFX Shot List` thumbnails.
+
+The release plugin also bundles `Turnover.app` for Data Burn-In headless export, so **Burn-In Transparent** and **Burn-In Customize** use the matching app/parser version that shipped with the plugin. Node.js is still used by other SpliceKit planner/export tools.
 
 ## Install Node.js
 
@@ -90,7 +96,7 @@ Install Turnover.command
 4. Let the installer configure Turnover's Node.js dependencies automatically.
 5. Restart Final Cut Pro and open the `Turnover` menu.
 
-The installer opens Terminal, installs the bundled native plugin, its private spreadsheet runtime, and the `VFX Naming` Motion title template. The plugin is copied to:
+The installer opens Terminal, installs the bundled native plugin, the matching `Turnover.app` used by Burn-In headless export, its private spreadsheet runtime, and the `VFX Naming` Motion title template. The plugin is copied to:
 
 ```text
 ~/Library/Application Support/SpliceKit/plugins/com.turnover.tools

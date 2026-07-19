@@ -4,9 +4,13 @@ enum CacheManager {
     static let retentionDays = 7
     static let maximumBytes: Int64 = 500 * 1_024 * 1_024
 
-    static var inboxURL: URL {
+    static var supportURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Turnover/Inbox", isDirectory: true)
+            .appendingPathComponent("Turnover", isDirectory: true)
+    }
+
+    static var inboxURL: URL {
+        supportURL.appendingPathComponent("Inbox", isDirectory: true)
     }
 
     static func prepareAndClean() throws {

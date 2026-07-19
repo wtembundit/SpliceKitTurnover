@@ -212,6 +212,20 @@ function parseCustomMetadata(blob = "") {
   }).join(" | ");
 }
 
+function parseMetadataEntries(blob = "") {
+  const entries = [];
+  for (const match of blob.matchAll(/<md\s+([^>]*?)(?:\/>|>[\s\S]*?<\/md>)/g)) {
+    const attrs = parseAttrs(match[1]);
+    const key = trim(attrs.key);
+    const value = trim(decodeXML(attrs.value));
+    const label = trim(decodeXML(attrs.displayName)) || key;
+    const source = trim(attrs.source);
+    if (!label || !value) continue;
+    entries.push({ key, label, value, source });
+  }
+  return entries;
+}
+
 function parseAssets(xml, formatMap) {
   const assets = {};
   const firstMediaRepSrc = (body = "") => {
@@ -235,6 +249,7 @@ function parseAssets(xml, formatMap) {
       hasVideo: trim(attrs.hasVideo),
       frameDuration: formatInfo.frameDuration || CONFIG.defaultFrameDuration,
       customMetadata: parseCustomMetadata(body),
+      metadataEntries: parseMetadataEntries(body),
     };
   };
   for (const match of xml.matchAll(/<asset\s+([^>]*?)\/>/gs)) remember(parseAttrs(match[1]));
@@ -878,6 +893,7 @@ function collectBodyDetailsForRange(node, body = "", assetMap, visibleStartOverr
   return {
     hasDisplayableSegments: sourceOrder.length > 0,
     groups: sourceOrder.map((key) => sourceGroups[key]).filter(Boolean),
+    segments,
     usedContainerTimeMapFallback,
   };
 }
@@ -1157,7 +1173,7 @@ async function main() {
   await fs.mkdir(args.outputDir, { recursive: true });
   await fs.mkdir(path.dirname(args.report), { recursive: true });
   const edlPath = path.join(args.outputDir, `VFX Pull EDL - ${safeProject}.edl`);
-  const tsvPath = path.join(args.outputDir, `VFX Pull EDL - ${safeProject}.tsv`);
+  const tsvPath = path.join(path.dirname(args.report), `VFX Pull EDL - ${safeProject}.tsv`);
   await fs.writeFile(edlPath, edlText);
   await fs.writeFile(tsvPath, buildCompanionTSV(companionRows));
   const reportLines = [
@@ -1174,6 +1190,7 @@ async function main() {
 }
 
 export {
+  collectBodyDetailsForRange,
   collectGlobalSourceSegments,
   collectGlobalVfxTitles,
   collectPullRows,

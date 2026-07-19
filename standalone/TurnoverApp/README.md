@@ -10,7 +10,7 @@ Turnover is a native macOS application for Final Cut Pro turnover workflows. It 
 
 ## Install
 
-1. Download `Turnover-Standalone-v1.3.0.zip` from the latest GitHub release.
+1. Download the latest `Turnover-Standalone-v*.zip` from the GitHub release page.
 2. Extract the archive.
 3. Move `Turnover.app` to the Applications folder.
 4. Open Turnover. If macOS blocks the first launch, Control-click the app, choose **Open**, then confirm.
@@ -28,11 +28,26 @@ The source is never overwritten. Bundle inputs are read from `Info.fcpxml`; gene
 ## Tools
 
 - **Conform Prep**: flatten supported sync clips and prepare timelines for online conform.
+- **Data Burn-In**: build customizable burn-ins from FCPXML, preview against a reference movie, export transparent ProRes 4444 overlays, or export H.264/HEVC burned-in review movies.
 - **Auto Marker**: create Standard, To Do, or Chapter markers from VFX naming titles.
 - **VFX Pull EDL**: create source pull EDL/TSV files with per-side handles.
 - **VFX Naming**: auto-number VFX naming titles or reset them to `XXXX`.
 - **VFX Timeline**: place returned VFX renders and add the `VFX Deliveries` keyword.
 - **VFX Shot List**: extract marker-anchored thumbnails from a user-exported reference movie and generate an Excel workbook.
+
+## Data Burn-In
+
+Data Burn-In builds a frame-resolved preview cache from FCPXML and lets users choose what appears in each burn-in position.
+
+Use it for:
+
+- Transparent ProRes 4444 overlays for Final Cut Pro or finishing workflows.
+- H.264/HEVC burned-in review movies with audio from the selected reference video.
+- Source filename, source timecode, timeline timecode, metadata, connected layer details, retime, transform, and VFX notes.
+- Presets that can be saved locally or shared as JSON.
+
+Transparent overlay export does not need a reference video. Burned-in reference export needs a selected video.
+
 ## VFX Shot List
 
 VFX Shot List requires:

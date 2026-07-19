@@ -1,14 +1,17 @@
 # Standalone App Optimization Plan
 
-## Turnover Team Assessment
+## Turnover Team Decision
 
-The Bun-compiled engine path is promising, but it should **not** be folded into a bugfix release. It changes the standalone runtime architecture even if the FCPXML scripts remain the same.
+This plan is intentionally parked until the Data Burn-In work is stable. Do **not** re-open the app-size decision during normal bugfix work.
+
+The Bun-compiled engine path is the preferred future direction, but it should **not** be folded into a bugfix release. It changes the standalone runtime architecture even if the FCPXML scripts remain the same.
 
 Current recommendation:
 
-- Keep the bundled Node.js runtime for v1.3.2 so the release stays low-risk and plug-and-play.
+- Keep the bundled Node.js runtime for current releases so Turnover remains low-risk and plug-and-play.
+- Finish Data Burn-In first; do not mix the runtime-size work with Burn-In feature development.
 - Treat the Bun engine as a dedicated optimization spike for a later release.
-- Do the spike only after we have a lightweight smoke suite for Conform Prep, VFX Naming, Auto Marker, VFX Pull EDL, VFX Timeline, and VFX Shot List.
+- Do the spike only after we have a lightweight smoke suite for Conform Prep, Marker, VFX Naming, Auto Marker, VFX Pull EDL, VFX Timeline, VFX Shot List, and Data Burn-In preview-cache generation.
 - Compare outputs byte-for-byte or semantically against the current Node runtime before switching users over.
 
 Why this is attractive:
@@ -24,7 +27,7 @@ Main concerns:
 - Any architecture switch should happen only when the current tool behavior is already well covered by smoke tests.
 
 ## Goal
-Reduce the Turnover standalone app bundle size (~55MB -> ~10MB) while preserving **single source of truth** for FCPXML logic and maintaining **plug and play** (zero external setup for end users).
+Reduce the Turnover standalone app bundle size while preserving **single source of truth** for FCPXML logic and maintaining **plug and play** (zero external setup for end users).
 
 ---
 
@@ -32,11 +35,13 @@ Reduce the Turnover standalone app bundle size (~55MB -> ~10MB) while preserving
 
 | Component | Size | Purpose |
 |-----------|------|---------|
-| `runtime/node` (Node.js v24.18.0) | ~45MB | Runs the `.mjs` scripts |
-| `node_modules/` (exceljs + deps) | ~6MB | Only needed for Excel workbook generation |
-| 9 x `.mjs` scripts | < 1MB | FCPXML planning logic (shared with plugin) |
-| Swift binary + resources | ~3MB | App UI, capture, helpers |
-| **Total** | **~55MB** | |
+| Component | Current Size | Purpose |
+|-----------|--------------|---------|
+| `runtime/node` (Node.js v24.18.0) | ~115MB | Runs the `.mjs` scripts |
+| `node_modules/` (exceljs + deps) | ~12-13MB | Only needed for Excel workbook generation |
+| `.mjs` scripts | < 1MB | FCPXML planning logic (shared with plugin) |
+| Swift binary + resources | Small compared with Node | App UI, capture, helpers |
+| **Total app bundle** | **~132MB** | Latest observed standalone build |
 
 The `.mjs` scripts are the **critical shared asset** -- identical files used by both the standalone app (via bundled Node.js) and the plugin edition (via system Node.js). **Any approach must keep these untouched.**
 
@@ -92,7 +97,7 @@ The plugin edition (`plugins/com.turnover.tools/`, `lua/`, `motion-templates/`) 
 **Result: ~12MB, plug and play, single source of truth preserved.**
 
 ### Path E: Keep current approach (do nothing)
-- Zero risk, zero effort, but still ~55MB.
+- Zero risk, zero effort, but still ~132MB based on the latest observed build.
 
 ---
 
@@ -279,12 +284,12 @@ If the release script has any references to standalone Node.js bundling, update 
 
 | Before | After |
 |--------|-------|
-| `runtime/node`: 45MB | `turnover-engine`: ~8MB |
-| `node_modules/`: 6MB | (bundled into engine) |
+| `runtime/node`: ~115MB | `turnover-engine`: target ~8-20MB |
+| `node_modules/`: ~12-13MB | (bundled into engine) |
 | `.mjs` scripts: <1MB | (bundled into engine) |
 | Swift + rest: ~3MB | Swift + rest: ~3MB |
 | Motion Templates: <1MB | Motion Templates: <1MB |
-| **Total: ~55MB** | **Total: ~12MB (78% smaller)** |
+| **Total: ~132MB** | **Target: ~15-30MB, to be proven by spike** |
 
 ---
 

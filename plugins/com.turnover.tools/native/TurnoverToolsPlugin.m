@@ -15,7 +15,7 @@ static NSTextField *gRunLabel = nil;
 static BOOL gToolRunInProgress = NO;
 static BOOL gDidAutoCheckForUpdates = NO;
 static NSString *gUpdateStatusText = @"Not checked";
-static NSString * const TTTurnoverVersion = @"1.3.2";
+static NSString * const TTTurnoverVersion = @"1.4.0";
 static NSString * const TTLatestReleaseAPI = @"https://api.github.com/repos/wtembundit/SpliceKitTurnover/releases/latest";
 static NSString * const TTLatestReleaseURL = @"https://github.com/wtembundit/SpliceKitTurnover/releases/latest";
 
@@ -23,6 +23,7 @@ static void TTShowPanel(void);
 static NSDictionary *TTRunTool(NSString *toolId);
 static NSDictionary *TTRunConformPrepVerify(void);
 static NSDictionary *TTRunAutoMarker(NSString *markerKind, BOOL renameMarkers);
+static NSDictionary *TTRunMarkerExport(NSString *filter, NSString *format);
 static NSDictionary *TTRunLuaCompatibilityScript(NSString *scriptName);
 static NSDictionary *TTResetLuaVM(void);
 static BOOL TTFileExists(NSString *path);
@@ -116,6 +117,19 @@ static NSString *TTSafeFilenamePart(NSString *value) {
     }
     NSString *safe = TTTrimString(out);
     return safe.length > 0 ? safe : @"Untitled Project";
+}
+
+static NSDictionary *TTJSONFromProcessOutput(NSString *output) {
+    NSArray<NSString *> *lines = [output componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
+    for (NSString *line in [lines reverseObjectEnumerator]) {
+        NSString *trimmed = TTTrimString(line);
+        if (trimmed.length == 0) continue;
+        NSData *data = [trimmed dataUsingEncoding:NSUTF8StringEncoding];
+        NSError *error = nil;
+        id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
+        if ([json isKindOfClass:NSDictionary.class]) return json;
+    }
+    return @{};
 }
 
 static NSString *TTProjectNameFromShotListManifest(NSString *manifestPath) {
@@ -328,6 +342,23 @@ static NSString *TTChoosePath(NSString *prompt, BOOL canChooseFiles, BOOL canCho
     });
 }
 
+static NSString *TTChooseSavePath(NSString *prompt, NSString *defaultName, NSString *extension) {
+    return TTOnMainSync(^id{
+        NSSavePanel *panel = [NSSavePanel savePanel];
+        panel.title = prompt ?: @"Save";
+        panel.message = prompt ?: @"Save";
+        panel.nameFieldStringValue = defaultName ?: @"Turnover-Data-Burn-In.mov";
+        panel.canCreateDirectories = YES;
+        if (extension.length > 0) {
+            UTType *type = [UTType typeWithFilenameExtension:extension];
+            if (type) panel.allowedContentTypes = @[type];
+        }
+        NSInteger response = [panel runModal];
+        if (response != NSModalResponseOK) return nil;
+        return panel.URL.path;
+    });
+}
+
 static NSString *TTTextPrompt(NSString *title, NSString *message, NSString *defaultValue) {
     return TTOnMainSync(^id{
         NSAlert *alert = [[NSAlert alloc] init];
@@ -401,6 +432,54 @@ static NSDictionary *TTMarkerOptionsPrompt(void) {
         return @{
             @"marker_kind": popup.titleOfSelectedItem ?: @"standard",
             @"rename_markers": @(rename.state == NSControlStateValueOn)
+        };
+    });
+}
+
+static NSDictionary *TTMarkerExportOptionsPrompt(void) {
+    return TTOnMainSync(^id{
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"Marker Export";
+        alert.informativeText = @"Choose which markers to export and the file format.";
+        [alert addButtonWithTitle:@"Export"];
+        [alert addButtonWithTitle:@"Cancel"];
+
+        NSDictionary<NSString *, NSString *> *filterValues = @{
+            @"All Markers": @"all",
+            @"Standard": @"standard",
+            @"To Do": @"todo",
+            @"Chapter": @"chapter",
+            @"Turnover Recheck": @"recheck"
+        };
+        NSDictionary<NSString *, NSString *> *formatValues = @{
+            @"EDL": @"edl",
+            @"CSV": @"csv",
+            @"TXT": @"txt"
+        };
+
+        NSStackView *stack = [[NSStackView alloc] initWithFrame:NSMakeRect(0, 0, 360, 70)];
+        stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+        stack.alignment = NSLayoutAttributeLeading;
+        stack.spacing = 8;
+
+        NSPopUpButton *filterPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 240, 26) pullsDown:NO];
+        [filterPopup addItemsWithTitles:@[@"All Markers", @"Standard", @"To Do", @"Chapter", @"Turnover Recheck"]];
+        [filterPopup selectItemWithTitle:@"All Markers"];
+        [stack addArrangedSubview:filterPopup];
+
+        NSPopUpButton *formatPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 240, 26) pullsDown:NO];
+        [formatPopup addItemsWithTitles:@[@"EDL", @"CSV", @"TXT"]];
+        [formatPopup selectItemWithTitle:@"EDL"];
+        [stack addArrangedSubview:formatPopup];
+
+        alert.accessoryView = stack;
+        NSInteger response = [alert runModal];
+        if (response != NSAlertFirstButtonReturn) return nil;
+        NSString *filterTitle = filterPopup.titleOfSelectedItem ?: @"All Markers";
+        NSString *formatTitle = formatPopup.titleOfSelectedItem ?: @"EDL";
+        return @{
+            @"filter": filterValues[filterTitle] ?: @"all",
+            @"format": formatValues[formatTitle] ?: @"edl"
         };
     });
 }
@@ -845,6 +924,258 @@ static BOOL TTYesNoPrompt(NSString *title, NSString *message, NSString *yesTitle
         return @(response == NSAlertFirstButtonReturn);
     });
     return answer.boolValue;
+}
+
+static NSDictionary *TTRunMarkerExport(NSString *filter, NSString *format) {
+    NSString *dataPath = TTPluginDataPath();
+    NSString *sourceXML = [dataPath stringByAppendingPathComponent:@"Marker_Export_Source.fcpxml"];
+    NSString *reportPath = [dataPath stringByAppendingPathComponent:@"Marker_Export_Report.txt"];
+    NSString *scriptPath = [TTPluginRootPath() stringByAppendingPathComponent:@"scripts/export_markers_fcpxml.mjs"];
+    NSString *nodePath = TTWhich(@"node");
+    NSString *resolvedFilter = filter.length > 0 ? filter : @"all";
+    NSString *resolvedFormat = format.length > 0 ? format : @"edl";
+
+    [[NSFileManager defaultManager] createDirectoryAtPath:dataPath withIntermediateDirectories:YES attributes:nil error:nil];
+    [[NSFileManager defaultManager] removeItemAtPath:sourceXML error:nil];
+    [[NSFileManager defaultManager] removeItemAtPath:reportPath error:nil];
+
+    if (nodePath.length == 0) {
+        return @{@"status": @"error", @"message": @"Node.js runtime not found"};
+    }
+    if (!TTFileExists(scriptPath)) {
+        return @{@"status": @"error", @"message": [NSString stringWithFormat:@"Missing Marker Export script: %@", scriptPath]};
+    }
+
+    NSString *outputFolder = TTChooseFolder(@"Choose Marker Export Folder");
+    if (outputFolder.length == 0) {
+        return @{@"status": @"cancelled", @"message": @"Marker Export cancelled"};
+    }
+
+    TTSetRunMessage(@"Marker Export: exporting current project...");
+    NSDictionary *exportResult = TTCallRPC(@"fcpxml.export", @{@"path": sourceXML});
+    if (exportResult[@"error"]) {
+        return @{@"status": @"error", @"stage": @"export", @"message": [exportResult[@"error"] description]};
+    }
+    if (!TTFileExists(sourceXML)) {
+        return @{@"status": @"error", @"stage": @"export", @"message": @"Export did not create source FCPXML"};
+    }
+
+    TTSetRunMessage(@"Marker Export: writing file...");
+    NSDictionary *result = TTRunProcess(nodePath, @[
+        scriptPath,
+        @"--source-xml", sourceXML,
+        @"--output-dir", outputFolder,
+        @"--filter", resolvedFilter,
+        @"--format", resolvedFormat,
+        @"--report", reportPath
+    ]);
+    NSDictionary *json = TTJSONFromProcessOutput(result[@"output"] ?: @"");
+    if (![result[@"status"] isEqual:@"ok"] || ![json[@"status"] isEqual:@"ok"]) {
+        NSString *message = json[@"message"] ?: result[@"output"] ?: @"Marker Export failed";
+        return @{
+            @"status": @"error",
+            @"stage": @"marker_export",
+            @"message": message,
+            @"source_xml_path": sourceXML,
+            @"report_path": reportPath,
+            @"output_folder": outputFolder
+        };
+    }
+
+    NSString *pathKey = [NSString stringWithFormat:@"%@_path", resolvedFormat];
+    NSString *outputPath = [json[pathKey] isKindOfClass:NSString.class] ? json[pathKey] : @"";
+    if (outputPath.length > 0) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:outputPath]]];
+        });
+    }
+
+    TTSetRunMessage(@"Marker Export: complete");
+    return @{
+        @"status": @"ok",
+        @"source_xml_path": sourceXML,
+        @"report_path": reportPath,
+        @"output_folder": outputFolder,
+        @"output_path": outputPath,
+        @"filter": resolvedFilter,
+        @"format": resolvedFormat
+    };
+}
+
+static NSString *TTBundledTurnoverAppPath(void) {
+    NSArray<NSString *> *candidates = @[
+        [TTPluginRootPath() stringByAppendingPathComponent:@"Turnover.app"],
+        @"/Applications/Turnover.app",
+        [NSHomeDirectory() stringByAppendingPathComponent:@"Applications/Turnover.app"],
+        @"/Users/arm/Documents/Splicekit/standalone/TurnoverApp/build/Turnover.app"
+    ];
+    for (NSString *path in candidates) {
+        BOOL isDir = NO;
+        if ([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDir] && isDir) {
+            return path;
+        }
+    }
+    return @"";
+}
+
+static NSString *TTTurnoverExecutablePath(void) {
+    NSString *appPath = TTBundledTurnoverAppPath();
+    if (appPath.length == 0) return @"";
+    NSString *executable = [appPath stringByAppendingPathComponent:@"Contents/MacOS/Turnover"];
+    return TTFileExists(executable) ? executable : @"";
+}
+
+static NSDictionary *TTChooseBurnInPreset(NSArray<NSDictionary *> *presets) {
+    return TTOnMainSync(^id{
+        if (presets.count == 0) return nil;
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.messageText = @"Burn-In Transparent";
+        alert.informativeText = @"Choose a Turnover preset for the transparent ProRes 4444 overlay.";
+        [alert addButtonWithTitle:@"Export"];
+        [alert addButtonWithTitle:@"Cancel"];
+
+        NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 340, 26) pullsDown:NO];
+        NSMutableArray<NSString *> *titles = [NSMutableArray array];
+        NSMutableDictionary<NSString *, NSDictionary *> *byTitle = [NSMutableDictionary dictionary];
+        NSString *selectedTitle = @"";
+        for (NSDictionary *preset in presets) {
+            NSString *name = [preset[@"name"] isKindOfClass:NSString.class] ? preset[@"name"] : @"";
+            NSString *presetID = [preset[@"id"] isKindOfClass:NSString.class] ? preset[@"id"] : @"";
+            if (name.length == 0 || presetID.length == 0) continue;
+            NSString *title = name;
+            NSUInteger duplicate = 2;
+            while (byTitle[title]) {
+                title = [NSString stringWithFormat:@"%@ (%lu)", name, (unsigned long)duplicate];
+                duplicate += 1;
+            }
+            [titles addObject:title];
+            byTitle[title] = preset;
+            if ([preset[@"selected"] boolValue]) selectedTitle = title;
+        }
+        if (titles.count == 0) return nil;
+        [popup addItemsWithTitles:titles];
+        if (selectedTitle.length > 0) [popup selectItemWithTitle:selectedTitle];
+        alert.accessoryView = popup;
+
+        NSInteger response = [alert runModal];
+        if (response != NSAlertFirstButtonReturn) return nil;
+        return byTitle[popup.titleOfSelectedItem ?: @""];
+    });
+}
+
+static NSDictionary *TTRunDataBurnInTransparentExport(void) {
+    NSString *dataPath = TTPluginDataPath();
+    NSString *sourceXML = [dataPath stringByAppendingPathComponent:@"Data_Burn_In_Source.fcpxml"];
+    NSString *turnoverExecutable = TTTurnoverExecutablePath();
+    [[NSFileManager defaultManager] createDirectoryAtPath:dataPath withIntermediateDirectories:YES attributes:nil error:nil];
+    [[NSFileManager defaultManager] removeItemAtPath:sourceXML error:nil];
+
+    if (turnoverExecutable.length == 0) {
+        return @{@"status": @"error", @"message": @"Turnover.app was not found. Install or build Turnover before using one-click Data Burn-In export."};
+    }
+
+    TTSetRunMessage(@"Data Burn-In: loading Turnover presets...");
+    NSDictionary *presetResult = TTRunProcess(turnoverExecutable, @[@"--list-burn-in-presets"]);
+    NSDictionary *presetJSON = TTJSONFromProcessOutput(presetResult[@"output"] ?: @"");
+    NSArray *presets = [presetJSON[@"presets"] isKindOfClass:NSArray.class] ? presetJSON[@"presets"] : @[];
+    if (![presetResult[@"status"] isEqual:@"ok"] || ![presetJSON[@"status"] isEqual:@"ok"] || presets.count == 0) {
+        return @{@"status": @"error", @"stage": @"presets", @"message": presetResult[@"output"] ?: @"Could not load Turnover Data Burn-In presets."};
+    }
+
+    NSDictionary *preset = TTChooseBurnInPreset(presets);
+    if (!preset) {
+        return @{@"status": @"cancelled", @"message": @"Data Burn-In export cancelled"};
+    }
+    NSString *presetID = [preset[@"id"] isKindOfClass:NSString.class] ? preset[@"id"] : @"";
+    NSString *presetName = [preset[@"name"] isKindOfClass:NSString.class] ? preset[@"name"] : @"Turnover Burn-In";
+
+    NSString *safePresetName = TTSafeFilenamePart(presetName.length > 0 ? presetName : @"Data-Burn-In");
+    if (safePresetName.length == 0) safePresetName = @"Data-Burn-In";
+    NSString *defaultName = [NSString stringWithFormat:@"%@-Transparent.mov", safePresetName];
+    NSString *outputPath = TTChooseSavePath(@"Save transparent ProRes 4444 overlay", defaultName, @"mov");
+    if (outputPath.length == 0) {
+        return @{@"status": @"cancelled", @"message": @"Data Burn-In export cancelled"};
+    }
+
+    TTSetRunMessage(@"Data Burn-In: exporting current project...");
+    NSDictionary *exportResult = TTCallRPC(@"fcpxml.export", @{@"path": sourceXML});
+    if (exportResult[@"error"]) {
+        return @{@"status": @"error", @"stage": @"export", @"message": [exportResult[@"error"] description]};
+    }
+    if (!TTFileExists(sourceXML)) {
+        return @{@"status": @"error", @"stage": @"export", @"message": @"Export did not create source FCPXML"};
+    }
+
+    TTSetRunMessage([NSString stringWithFormat:@"Data Burn-In: exporting transparent overlay with \"%@\"...", presetName]);
+    NSDictionary *renderResult = TTRunProcess(turnoverExecutable, @[
+        @"--burn-in-transparent",
+        @"--source-xml", sourceXML,
+        @"--preset-id", presetID,
+        @"--output", outputPath
+    ]);
+    NSDictionary *json = TTJSONFromProcessOutput(renderResult[@"output"] ?: @"");
+    if (![renderResult[@"status"] isEqual:@"ok"] || ![json[@"status"] isEqual:@"ok"]) {
+        NSString *message = json[@"message"] ?: renderResult[@"output"] ?: @"Data Burn-In transparent export failed.";
+        return @{
+            @"status": @"error",
+            @"stage": @"transparent_export",
+            @"message": message,
+            @"source_xml_path": sourceXML,
+            @"output_path": outputPath
+        };
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:outputPath]]];
+    });
+    TTSetRunMessage([NSString stringWithFormat:@"Data Burn-In transparent overlay complete\nOutput: %@", outputPath]);
+    return @{
+        @"status": @"ok",
+        @"source_xml_path": sourceXML,
+        @"output_path": outputPath,
+        @"preset_id": presetID,
+        @"preset_name": presetName,
+        @"engine_output": json
+    };
+}
+
+static NSDictionary *TTOpenDataBurnInInTurnover(void) {
+    NSString *dataPath = TTPluginDataPath();
+    NSString *sourceXML = [dataPath stringByAppendingPathComponent:@"Data_Burn_In_Source.fcpxml"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dataPath withIntermediateDirectories:YES attributes:nil error:nil];
+    [[NSFileManager defaultManager] removeItemAtPath:sourceXML error:nil];
+
+    TTSetRunMessage(@"Data Burn-In: exporting current project...");
+    NSDictionary *exportResult = TTCallRPC(@"fcpxml.export", @{@"path": sourceXML});
+    if (exportResult[@"error"]) {
+        return @{@"status": @"error", @"stage": @"export", @"message": [exportResult[@"error"] description]};
+    }
+    if (!TTFileExists(sourceXML)) {
+        return @{@"status": @"error", @"stage": @"export", @"message": @"Export did not create source FCPXML"};
+    }
+
+    NSString *appPath = TTBundledTurnoverAppPath();
+    NSURL *xmlURL = [NSURL fileURLWithPath:sourceXML];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSWorkspaceOpenConfiguration *configuration = [NSWorkspaceOpenConfiguration configuration];
+        if (appPath.length > 0) {
+            configuration.arguments = @[@"--open-burn-in-customize", sourceXML];
+            [[NSWorkspace sharedWorkspace] openURLs:@[xmlURL]
+                               withApplicationAtURL:[NSURL fileURLWithPath:appPath]
+                                      configuration:configuration
+                                  completionHandler:nil];
+        } else {
+            [[NSWorkspace sharedWorkspace] openURL:xmlURL];
+        }
+    });
+
+    TTSetRunMessage(@"Data Burn-In: opened in Turnover");
+    return @{
+        @"status": @"ok",
+        @"source_xml_path": sourceXML,
+        @"app_path": appPath,
+        @"message": @"Opened current project FCPXML in Turnover for Data Burn-In customization"
+    };
 }
 
 static NSDictionary *TTRunConformPrepVerify(void) {
@@ -2060,6 +2391,15 @@ static NSDictionary *TTRunGenerateVFXShotListFromThumbnails(void) {
 static NSDictionary *TTRunTool(NSString *toolId) {
     if ([toolId isEqualToString:@"conform_prep"]) return TTRunConformPrep();
     if ([toolId isEqualToString:@"conform_prep_verify"]) return TTRunConformPrepVerify();
+    if ([toolId isEqualToString:@"data_burn_in"]) return TTRunDataBurnInTransparentExport();
+    if ([toolId isEqualToString:@"data_burn_in_open"]) return TTOpenDataBurnInInTurnover();
+    if ([toolId isEqualToString:@"marker_export"]) {
+        NSDictionary *options = TTMarkerExportOptionsPrompt();
+        if (!options) return @{@"status": @"cancelled", @"message": @"Marker Export cancelled"};
+        NSString *filter = [options[@"filter"] isKindOfClass:NSString.class] ? options[@"filter"] : @"all";
+        NSString *format = [options[@"format"] isKindOfClass:NSString.class] ? options[@"format"] : @"edl";
+        return TTRunMarkerExport(filter, format);
+    }
     if ([toolId isEqualToString:@"vfx_timeline"]) return TTRunVFXTimeline();
     if ([toolId isEqualToString:@"vfx_shot_list"]) return TTRunVFXShotList();
     if ([toolId isEqualToString:@"vfx_shot_list_recover"]) return TTRunGenerateVFXShotListFromThumbnails();
@@ -2195,6 +2535,13 @@ static NSDictionary *TTRunTool(NSString *toolId) {
     });
 }
 
+- (void)runToolButton:(NSButton *)sender {
+    NSString *toolId = [sender.identifier isKindOfClass:NSString.class] ? sender.identifier : @"";
+    NSMenuItem *proxy = [[NSMenuItem alloc] initWithTitle:sender.title ?: toolId action:nil keyEquivalent:@""];
+    proxy.representedObject = toolId;
+    [self runMenuTool:proxy];
+}
+
 - (void)runMenuTool:(NSMenuItem *)sender {
     NSString *toolId = [sender.representedObject isKindOfClass:NSString.class] ? sender.representedObject : @"";
     NSString *label = sender.title ?: toolId;
@@ -2250,6 +2597,14 @@ static NSButton *TTButton(NSString *title, SEL action) {
     return button;
 }
 
+static NSButton *TTToolButton(NSString *title, NSString *toolId) {
+    TTEnsureController();
+    NSButton *button = [NSButton buttonWithTitle:title target:gController action:@selector(runToolButton:)];
+    button.bezelStyle = NSBezelStyleRounded;
+    button.identifier = toolId ?: @"";
+    return button;
+}
+
 static void TTShowPanel(void) {
     TTEnsureController();
 
@@ -2295,6 +2650,14 @@ static void TTShowPanel(void) {
         [verifyButtons addArrangedSubview:TTButton(@"Verify Conform Prep", @selector(runConformPrepVerify:))];
         [verifyButtons addArrangedSubview:TTButton(@"Generate VFX Shot List", @selector(runRecoverVFXShotList:))];
         [root addArrangedSubview:verifyButtons];
+
+        NSStackView *workflowButtons = [[NSStackView alloc] init];
+        workflowButtons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        workflowButtons.spacing = 8;
+        [workflowButtons addArrangedSubview:TTToolButton(@"Burn-In Transparent", @"data_burn_in")];
+        [workflowButtons addArrangedSubview:TTToolButton(@"Burn-In Customize", @"data_burn_in_open")];
+        [workflowButtons addArrangedSubview:TTToolButton(@"Marker Export", @"marker_export")];
+        [root addArrangedSubview:workflowButtons];
 
         gRunLabel = [NSTextField wrappingLabelWithString:@"Run tools from the Turnover menu."];
         gRunLabel.textColor = NSColor.secondaryLabelColor;
@@ -2367,6 +2730,9 @@ static void TTInstallMenuItem(void) {
 
     NSArray<NSDictionary *> *tools = @[
         @{@"title": @"Conform Prep", @"id": @"conform_prep"},
+        @{@"title": @"Burn-In Transparent...", @"id": @"data_burn_in"},
+        @{@"title": @"Burn-In Customize...", @"id": @"data_burn_in_open"},
+        @{@"title": @"Marker Export...", @"id": @"marker_export"},
         @{@"title": @"VFX Auto Naming", @"id": @"vfx_auto_naming"},
         @{@"title": @"VFX Reset Naming", @"id": @"vfx_reset_naming"},
         @{@"title": @"VFX Auto Marker", @"id": @"vfx_auto_marker"},
@@ -2413,6 +2779,23 @@ static NSDictionary *TTHandleConformPrep(__unused NSDictionary *params) {
 
 static NSDictionary *TTHandleConformPrepVerify(__unused NSDictionary *params) {
     return TTRunTool(@"conform_prep_verify");
+}
+
+static NSDictionary *TTHandleDataBurnIn(__unused NSDictionary *params) {
+    return TTRunTool(@"data_burn_in");
+}
+
+static NSDictionary *TTHandleDataBurnInOpen(__unused NSDictionary *params) {
+    return TTRunTool(@"data_burn_in_open");
+}
+
+static NSDictionary *TTHandleMarkerExport(NSDictionary *params) {
+    NSString *filter = [params[@"filter"] isKindOfClass:NSString.class] ? params[@"filter"] : @"";
+    NSString *format = [params[@"format"] isKindOfClass:NSString.class] ? params[@"format"] : @"";
+    if (filter.length > 0 || format.length > 0) {
+        return TTRunMarkerExport(filter.length > 0 ? filter : @"all", format.length > 0 ? format : @"edl");
+    }
+    return TTRunTool(@"marker_export");
 }
 
 static NSDictionary *TTHandleRunTool(NSDictionary *params) {
@@ -2492,6 +2875,31 @@ void SpliceKitPlugin_init(SpliceKitPluginAPI *api) {
     }, @{
         @"description": @"Verify a Conform Prep result by choosing original/imported XML and optional CSV files",
         @"readOnly": @NO
+    });
+
+    api->registerMethod(@"com.turnover.tools.data_burn_in", ^NSDictionary *(NSDictionary *params) {
+        return TTHandleDataBurnIn(params);
+    }, @{
+        @"description": @"Export a transparent ProRes 4444 Data Burn-In overlay using a Turnover preset",
+        @"readOnly": @NO
+    });
+
+    api->registerMethod(@"com.turnover.tools.data_burn_in_open", ^NSDictionary *(NSDictionary *params) {
+        return TTHandleDataBurnInOpen(params);
+    }, @{
+        @"description": @"Export the current FCP project XML and open it in Turnover for Data Burn-In customization",
+        @"readOnly": @NO
+    });
+
+    api->registerMethod(@"com.turnover.tools.marker_export", ^NSDictionary *(NSDictionary *params) {
+        return TTHandleMarkerExport(params);
+    }, @{
+        @"description": @"Export timeline markers to EDL, CSV, or TXT",
+        @"readOnly": @NO,
+        @"params": @{
+            @"filter": @{@"type": @"string", @"required": @NO},
+            @"format": @{@"type": @"string", @"required": @NO}
+        }
     });
 
     api->registerMethod(@"com.turnover.tools.vfx_timeline", ^NSDictionary *(NSDictionary *params) {

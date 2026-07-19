@@ -231,6 +231,14 @@ function parseSequenceFormat(xml) {
   };
 }
 
+function frameDurationAttrForSequence(xml, formatId) {
+  for (const match of xml.matchAll(/<format\s+([^>]*?)\/?\s*>/g)) {
+    const attrs = parseAttrs(match[1]);
+    if (attrs.id === formatId && attrs.frameDuration) return attrs.frameDuration;
+  }
+  return "100/2400s";
+}
+
 function nextResourceId(xml) {
   let maxId = 0;
   for (const match of xml.matchAll(/\bid="r(\d+)"/g)) {
@@ -598,6 +606,173 @@ function findAnchorInsertOffset(xml, parentNode) {
   return bodyEnd;
 }
 
+function nearestOwnerLabel(xml, index) {
+  const before = xml.slice(0, index);
+  const match = [...before.matchAll(/<(asset-clip|clip|sync-clip|ref-clip|video|title)\b([^>]*)>/g)].at(-1);
+  if (!match) return "timeline";
+  const attrs = parseAttrs(match[2]);
+  return `${match[1]} ${trim(attrs.name || attrs.ref || "unnamed")}`;
+}
+
+function locatorMap(xml) {
+  const locators = new Map();
+  for (const match of xml.matchAll(/<locator\b([^>]*)>/g)) {
+    const attrs = parseAttrs(match[1]);
+    if (attrs.id && attrs.url) locators.set(attrs.id, attrs.url);
+  }
+  return locators;
+}
+
+function sidecarStatus(sourceXml, url) {
+  if (!sourceXml || !url || /^[a-z]+:/i.test(url)) return "";
+  return "sidecar status not checked for VFX Timeline";
+}
+
+function recheckItems(xml, sourceXml = "") {
+  const items = [];
+  const magneticMaskRegex = /<filter-video\b(?=[^>]*\bname="Magnetic Mask")[^>]*\/>|<filter-video\b(?=[^>]*\bname="Magnetic Mask")[^>]*>[\s\S]*?<\/filter-video>/g;
+  for (const match of xml.matchAll(magneticMaskRegex)) {
+    const hasPayload = /<data\b|<param\b|dataLocator=/.test(match[0]);
+    const detail = hasPayload ? "effect payload present" : "effect shell only; mask analysis is not serialized in FCPXML";
+    items.push({ label: "Magnetic Mask", owner: nearestOwnerLabel(xml, match.index), detail, index: match.index });
+  }
+  const locators = locatorMap(xml);
+  for (const match of xml.matchAll(/<object-tracker\b[\s\S]*?<\/object-tracker>/g)) {
+    const locatorID = /dataLocator="([^"]+)"/.exec(match[0])?.[1] || "";
+    const url = locators.get(locatorID) || "";
+    const detail = [locatorID ? `locator ${locatorID}` : "no locator", url || "no sidecar url", sidecarStatus(sourceXml, url)]
+      .filter(Boolean)
+      .join("; ");
+    items.push({ label: "Object Tracking", owner: nearestOwnerLabel(xml, match.index), detail, index: match.index });
+  }
+  for (const match of xml.matchAll(/<adjust-stabilization\b[^>]*>/g)) {
+    items.push({ label: "Stabilization", owner: nearestOwnerLabel(xml, match.index), detail: "stabilization settings in XML", index: match.index });
+  }
+  for (const match of xml.matchAll(/<timeMap\b[^>]*\bframeSampling="optical-flow[^"]*"[^>]*>/g)) {
+    const attrs = parseAttrs(match[0]);
+    items.push({ label: "Optical Flow", owner: nearestOwnerLabel(xml, match.index), detail: attrs.frameSampling || "optical-flow", index: match.index });
+  }
+  return items;
+}
+
+function ownerForIndex(items, index) {
+  const candidates = items.filter((item) =>
+    item.openStart <= index &&
+    item.closeEnd != null &&
+    index <= item.closeEnd
+  );
+  if (candidates.length === 0) return null;
+  const depth = (item) => {
+    let count = 0;
+    let cursor = item.parentNode;
+    while (cursor) {
+      count += 1;
+      cursor = cursor.parentNode;
+    }
+    return count;
+  };
+  const ownerTags = new Set(["clip", "asset-clip", "ref-clip", "sync-clip"]);
+  const isVisibleOwner = (item) =>
+    ownerTags.has(item?.tag) &&
+    (item.attrs.lane != null || (item.parentNode?.tag === "spine" && item.parentNode?.parentNode?.tag === "sequence"));
+  const deepest = candidates.slice().sort((a, b) => depth(b) - depth(a) || b.openStart - a.openStart)[0];
+  let fallback = null;
+  let cursor = deepest?.tag === "video" || deepest?.tag === "title" ? deepest.parentNode : deepest;
+  while (cursor) {
+    if (ownerTags.has(cursor.tag)) {
+      fallback ||= cursor;
+      if (isVisibleOwner(cursor)) return cursor;
+    }
+    cursor = cursor.parentNode;
+  }
+  return fallback;
+}
+
+function topLevelMarkerStarts(xml, owner) {
+  const starts = new Set();
+  if (!owner?.closeStart) return starts;
+  const body = xml.slice(owner.openEnd, owner.closeStart);
+  const markerTags = new Set(["marker", "chapter-marker", "rating", "keyword", "analysis-marker", "hidden-clip-marker"]);
+  const tagRegex = /<(\/?)([\w:_-]+)(.*?)(\/?)>/gs;
+  const stack = [];
+  let match;
+  while ((match = tagRegex.exec(body))) {
+    const [, closing, tag, attrText, selfClosing] = match;
+    if (closing !== "/") {
+      if (stack.length === 0 && markerTags.has(tag)) {
+        const attrs = parseAttrs(attrText);
+        if (attrs.start) starts.add(attrs.start);
+      }
+      if (selfClosing !== "/") stack.push(tag);
+    } else {
+      stack.pop();
+    }
+  }
+  return starts;
+}
+
+function freeRecheckMarkerStart(owner, frameDurationAttr, usedStarts) {
+  const frameSeconds = parseFraction(frameDurationAttr) || (1 / 24);
+  const start = owner.start || 0;
+  const duration = Math.max(owner.duration || 0, frameSeconds);
+  const min = start;
+  const max = start + Math.max(duration - frameSeconds, 0);
+  const candidates = [];
+  for (let frame = 1; frame <= 24; frame += 1) candidates.push(Math.min(max, start + (frame * frameSeconds)));
+  candidates.push(start);
+  for (let frame = 1; frame <= 24; frame += 1) candidates.push(Math.max(min, start + duration - ((frame + 1) * frameSeconds)));
+  for (const candidate of candidates) {
+    const snapped = formatSeconds(Math.round(candidate / frameSeconds) * frameSeconds);
+    if (!usedStarts.has(snapped)) {
+      usedStarts.add(snapped);
+      return snapped;
+    }
+  }
+  const fallback = formatSeconds(start);
+  usedStarts.add(fallback);
+  return fallback;
+}
+
+function insertRecheckMarkers(xml, sourceXml, frameDurationAttr) {
+  const recheck = recheckItems(xml, sourceXml);
+  const markerLabels = new Set(["Magnetic Mask", "Object Tracking", "Stabilization", "Optical Flow"]);
+  const owners = collectStoryNodes(xml, new Set(["clip", "asset-clip", "ref-clip", "sync-clip", "video"]));
+  const insertions = new Map();
+  const skipped = [];
+  for (const item of recheck) {
+    if (!markerLabels.has(item.label)) continue;
+    const owner = ownerForIndex(owners, item.index);
+    if (!owner) {
+      skipped.push(item);
+      continue;
+    }
+    const ownerLabel = `${owner.tag} ${trim(owner.attrs.name || owner.attrs.ref || "unnamed")}`;
+    const starts = topLevelMarkerStarts(xml, owner);
+    const bucket = insertions.get(owner) || [];
+    for (const marker of bucket) {
+      const attrs = parseAttrs(marker);
+      if (attrs.start) starts.add(attrs.start);
+    }
+    const start = freeRecheckMarkerStart(owner, frameDurationAttr, starts);
+    const note = `${ownerLabel}${item.owner !== ownerLabel ? ` | source: ${item.owner}` : ""}${item.detail ? ` | ${item.detail}` : ""}`;
+    bucket.push(`<marker start="${xmlEscape(start)}" duration="${xmlEscape(frameDurationAttr)}" value="${xmlEscape(`TURNOVER RECHECK: ${item.label}`)}" completed="1" note="${xmlEscape(note)}"/>`);
+    insertions.set(owner, bucket);
+  }
+  const placements = [];
+  for (const [owner, markers] of insertions) {
+    placements.push({
+      insertBefore: findAnchorInsertOffset(xml, owner),
+      clipXml: markers.join("\n"),
+    });
+  }
+  return {
+    xml: insertConnectedClipsIntoParents(xml, placements),
+    recheck,
+    created: [...insertions.values()].reduce((total, markers) => total + markers.length, 0),
+    skipped,
+  };
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const xml = await fs.readFile(args.sourceXml, "utf8");
@@ -617,6 +792,7 @@ async function main() {
   const sequence = parseSequenceFormat(xml);
   const sequenceFormat = formats.get(sequence.formatId) ?? { frameDuration: 1 / 24 };
   const frameDuration = sequenceFormat.frameDuration ?? (1 / 24);
+  const frameDurationAttr = frameDurationAttrForSequence(xml, sequence.formatId);
   const handleFrames = Number(config.handle_frames || config.total_handle_frames || 0) || 0;
   const slateFrames = Number(config.slate_frames || 0) || 0;
   const placementMode = trim(config.placement_mode || "connected") || "connected";
@@ -843,6 +1019,9 @@ async function main() {
     patched = insertIntoEvent(patched, eventBrowserItems.join("\n"));
   }
 
+  const recheckResult = insertRecheckMarkers(patched, args.sourceXml, frameDurationAttr);
+  patched = recheckResult.xml;
+
   // All placement offsets refer to the original XML. Rename variable-length
   // attributes only after every offset-based structural edit is complete.
   patched = applyTargetEventName(patched, report.targetEventName);
@@ -861,6 +1040,10 @@ async function main() {
     `Unmatched timeline titles: ${report.unmatchedTitles.length}`,
     `Too short: ${report.tooShort.length}`,
     `Unmatched delivery files: ${report.unmatchedFiles.length}`,
+    `Recheck items: ${recheckResult.recheck.length}`,
+    `Recheck markers created: ${recheckResult.created}`,
+    `Recheck markers skipped: ${recheckResult.skipped.length}`,
+    ...recheckResult.recheck.map((item) => `Recheck ${item.label}: ${item.owner}${item.detail ? ` (${item.detail})` : ""}`),
     report.warnings.length ? `Warnings: ${report.warnings.join(" | ")}` : "",
   ].filter(Boolean).join("\n");
   await fs.writeFile(args.report, reportText + "\n", "utf8");

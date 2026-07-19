@@ -403,6 +403,9 @@ function buildFlattenedSpineSequenceSyncReplacement(node, body, assets, reportLi
       item.tag === "object-tracker" ||
       item.tag.startsWith("adjust-") ||
       item.tag.startsWith("filter-") ||
+      item.tag === "sync-source" ||
+      item.tag === "audio-channel-source" ||
+      item.tag === "audio-role-source" ||
       ["marker", "chapter-marker", "rating", "keyword"].includes(item.tag)
     )
   );
@@ -500,6 +503,7 @@ function classifyTopLevelElements(elements) {
     intrinsic: [],
     story: [],
     markersAndKeywords: [],
+    syncSources: [],
     audioComp: [],
     filters: [],
     metadata: [],
@@ -513,9 +517,10 @@ function classifyTopLevelElements(elements) {
     else if (tag === "object-tracker") buckets.objectTrackers.push(item.xml);
     else if (tag.startsWith("adjust-")) buckets.intrinsic.push(item.xml);
     else if (["marker", "chapter-marker", "rating", "keyword"].includes(tag)) buckets.markersAndKeywords.push(item.xml);
+    else if (tag === "sync-source") buckets.syncSources.push(item.xml);
     else if (tag === "metadata") buckets.metadata.push(item.body);
     else if (tag.startsWith("filter-")) buckets.filters.push(item.xml);
-    else if (tag === "audio-role-source") buckets.audioComp.push(item.xml);
+    else if (tag === "audio-channel-source" || tag === "audio-role-source") buckets.audioComp.push(item.xml);
     else buckets.story.push(item.xml);
   }
 
@@ -656,6 +661,25 @@ function quantizeTime(value, den = 2400n) {
       ? (numerator + half) / denominator
       : (numerator - half) / denominator;
   return { num: rounded, den };
+}
+
+function mulTimeByInt(value, multiplier) {
+  return { num: value.num * BigInt(multiplier), den: value.den };
+}
+
+function roundDivBigInt(num, den) {
+  if (den === 0n) return 0n;
+  const sign = (num < 0n) !== (den < 0n) ? -1n : 1n;
+  const absNum = num < 0n ? -num : num;
+  const absDen = den < 0n ? -den : den;
+  const rounded = (absNum + absDen / 2n) / absDen;
+  return sign < 0n ? -rounded : rounded;
+}
+
+function snapTimeToFrame(value, frameDuration) {
+  if (!value || !frameDuration || frameDuration.num === 0n) return value;
+  const frames = roundDivBigInt(value.num * frameDuration.den, value.den * frameDuration.num);
+  return { num: frames * frameDuration.num, den: frameDuration.den };
 }
 
 function parseTimeMapXML(xml) {
@@ -2896,8 +2920,15 @@ function flattenSimpleSyncClips(xml, assets, reportLines, formatFrameDurations) 
         ...rebasedGenericOuterTitlesInside,
         ...dedupedPrimaryMarkers,
         ...dedupedOuterMarkers,
-        ...hoistedPrimaryBuckets.audioComp,
-        ...outerBuckets.audioComp,
+        ...(outputTag === "sync-clip"
+          ? dedupeXMLItems([
+              ...(hoistedPrimaryBuckets.syncSources || []),
+              ...(outerBuckets.syncSources || []),
+              ...(storyBuckets.syncSources || []),
+            ])
+          : []),
+        ...(outputTag === "sync-clip" ? [] : hoistedPrimaryBuckets.audioComp),
+        ...(outputTag === "sync-clip" ? [] : outerBuckets.audioComp),
         ...hoistedPrimaryBuckets.filters,
         ...outerBuckets.filters,
       ].forEach(addPart);
@@ -3417,6 +3448,265 @@ async function removeAudioForConform(xml) {
   return { xml: output, before, after };
 }
 
+function nearestConformOwnerLabel(xml, index) {
+  const before = xml.slice(0, index);
+  const match = [...before.matchAll(/<(asset-clip|clip|sync-clip|ref-clip|video|title)\b([^>]*)>/g)].at(-1);
+  if (!match) return "timeline";
+  const attrs = parseAttrs(match[2]);
+  return `${match[1]} ${attrs.name || attrs.ref || "unnamed"}`;
+}
+
+function conformRecheckItems(xml) {
+  const items = [];
+  const magneticMaskRegex = /<filter-video\b(?=[^>]*\bname="Magnetic Mask")[^>]*\/>|<filter-video\b(?=[^>]*\bname="Magnetic Mask")[^>]*>[\s\S]*?<\/filter-video>/g;
+  for (const match of xml.matchAll(magneticMaskRegex)) {
+    const hasPayload = /<data\b|<param\b|dataLocator=/.test(match[0]);
+    const detail = hasPayload ? "effect payload present" : "effect shell only; mask analysis may need review";
+    items.push({
+      label: "Magnetic Mask",
+      owner: nearestConformOwnerLabel(xml, match.index),
+      detail,
+      index: match.index,
+    });
+  }
+  for (const match of xml.matchAll(/<adjust-stabilization\b[^>]*>/g)) {
+    items.push({
+      label: "Stabilization",
+      owner: nearestConformOwnerLabel(xml, match.index),
+      detail: "stabilization settings in XML",
+      index: match.index,
+    });
+  }
+  for (const match of xml.matchAll(/<timeMap\b[^>]*\bframeSampling="optical-flow[^"]*"[^>]*>/g)) {
+    const attrs = parseAttrs(match[0]);
+    items.push({
+      label: "Optical Flow",
+      owner: nearestConformOwnerLabel(xml, match.index),
+      detail: attrs.frameSampling || "optical-flow",
+      index: match.index,
+    });
+  }
+  return items;
+}
+
+function collectConformRecheckOwners(xml) {
+  const stack = [];
+  const owners = [];
+  const tagRegex = /<(\/?)([\w:_-]+)(.*?)(\/?)>/gs;
+  let match;
+  while ((match = tagRegex.exec(xml))) {
+    const [, closing, tag, attrSource, selfClosing] = match;
+    if (closing !== "/") {
+      const attrs = parseAttrs(attrSource);
+      const parent = stack.at(-1) || null;
+      const node = {
+        tag,
+        attrs,
+        parent,
+        start: parseTimeValue(attrs.start || "") || { num: 0n, den: 1n },
+        duration: parseTimeValue(attrs.duration || "") || null,
+        openStart: match.index,
+        openEnd: tagRegex.lastIndex,
+        closeStart: selfClosing === "/" ? tagRegex.lastIndex : null,
+        closeEnd: selfClosing === "/" ? tagRegex.lastIndex : null,
+        selfClosing: selfClosing === "/",
+      };
+      if (["clip", "asset-clip", "ref-clip", "sync-clip", "video", "title"].includes(tag)) {
+        owners.push(node);
+      }
+      if (selfClosing !== "/") stack.push(node);
+    } else {
+      const node = stack.pop();
+      if (!node || node.tag !== tag) continue;
+      node.closeStart = match.index;
+      node.closeEnd = tagRegex.lastIndex;
+    }
+  }
+  return owners;
+}
+
+function conformRecheckOwnerForIndex(owners, index) {
+  const candidates = owners.filter((item) =>
+    item.openStart <= index &&
+    item.closeEnd != null &&
+    index <= item.closeEnd
+  );
+  if (candidates.length === 0) return null;
+  const depth = (item) => {
+    let count = 0;
+    let cursor = item.parent;
+    while (cursor) {
+      count += 1;
+      cursor = cursor.parent;
+    }
+    return count;
+  };
+  const ownerTags = new Set(["clip", "asset-clip", "ref-clip", "sync-clip"]);
+  const isVisibleOwner = (item) =>
+    ownerTags.has(item?.tag) &&
+    (item.attrs.lane != null || (item.parent?.tag === "spine" && item.parent?.parent?.tag === "sequence"));
+  const deepest = candidates.slice().sort((a, b) => depth(b) - depth(a) || b.openStart - a.openStart)[0];
+  let fallback = null;
+  let cursor = deepest?.tag === "video" || deepest?.tag === "title" ? deepest.parent : deepest;
+  while (cursor) {
+    if (ownerTags.has(cursor.tag)) {
+      fallback ||= cursor;
+      if (isVisibleOwner(cursor)) return cursor;
+    }
+    cursor = cursor.parent;
+  }
+  return fallback;
+}
+
+function topLevelConformMarkerInfo(xml, owner) {
+  const info = { starts: new Set(), values: new Set() };
+  if (owner.selfClosing || owner.closeStart == null) return info;
+  const body = xml.slice(owner.openEnd, owner.closeStart);
+  const markerTags = new Set(["marker", "chapter-marker", "rating", "keyword", "analysis-marker", "hidden-clip-marker"]);
+  const stack = [];
+  const tagRegex = /<(\/?)([\w:_-]+)(.*?)(\/?)>/gs;
+  let match;
+  while ((match = tagRegex.exec(body))) {
+    const [, closing, tag, attrText, selfClosing] = match;
+    if (closing !== "/") {
+      if (stack.length === 0 && markerTags.has(tag)) {
+        const attrs = parseAttrs(attrText);
+        if (attrs.start) info.starts.add(attrs.start);
+        if (attrs.value) info.values.add(attrs.value);
+      }
+      if (selfClosing !== "/") stack.push(tag);
+    } else {
+      stack.pop();
+    }
+  }
+  return info;
+}
+
+function freeConformRecheckMarkerStart(owner, frameDuration, usedStarts) {
+  const frame = frameDuration || { num: 1n, den: 24n };
+  const start = owner.start || { num: 0n, den: 1n };
+  const duration = owner.duration || frame;
+  const end = addTime(start, duration);
+  const max = compareTime(duration, frame) > 0 ? subTime(end, frame) : start;
+  const clamp = (value) => {
+    if (compareTime(value, start) < 0) return start;
+    if (compareTime(value, max) > 0) return max;
+    return value;
+  };
+  const candidates = [];
+  for (let frameIndex = 1; frameIndex <= 24; frameIndex += 1) {
+    candidates.push(clamp(addTime(start, mulTimeByInt(frame, frameIndex))));
+  }
+  candidates.push(start);
+  for (let frameIndex = 2; frameIndex <= 25; frameIndex += 1) {
+    candidates.push(clamp(subTime(end, mulTimeByInt(frame, frameIndex))));
+  }
+  for (const candidate of candidates) {
+    const snapped = formatTimeValue(snapTimeToFrame(candidate, frame));
+    if (!usedStarts.has(snapped)) {
+      usedStarts.add(snapped);
+      return snapped;
+    }
+  }
+  const fallback = formatTimeValue(snapTimeToFrame(start, frame));
+  usedStarts.add(fallback);
+  return fallback;
+}
+
+function conformMarkerInsertionOffset(xml, owner) {
+  if (owner.selfClosing) return owner.openEnd;
+  const body = xml.slice(owner.openEnd, owner.closeStart);
+  const trailingTags = new Set([
+    "sync-source",
+    "audio-channel-source",
+    "audio-role-source",
+    "filter-video",
+    "filter-video-mask",
+    "filter-audio",
+    "metadata",
+  ]);
+  const stack = [];
+  const tagRegex = /<(\/?)([\w:_-]+)(.*?)(\/?)>/gs;
+  let match;
+  while ((match = tagRegex.exec(body))) {
+    const [, closing, tag, , selfClosing] = match;
+    if (closing !== "/") {
+      if (stack.length === 0 && trailingTags.has(tag)) {
+        return owner.openEnd + match.index;
+      }
+      if (selfClosing !== "/") stack.push(tag);
+    } else {
+      stack.pop();
+    }
+  }
+  return owner.closeStart;
+}
+
+function insertConformRecheckMarkers(xml, frameDurationAttr) {
+  const recheck = conformRecheckItems(xml);
+  const owners = collectConformRecheckOwners(xml);
+  const frameDuration = typeof frameDurationAttr === "object" && frameDurationAttr
+    ? frameDurationAttr
+    : parseTimeValue(frameDurationAttr || "") || { num: 1n, den: 24n };
+  const frameDurationText = typeof frameDurationAttr === "object" && frameDurationAttr
+    ? formatTimeValue(frameDurationAttr)
+    : frameDurationAttr || "1/24s";
+  const markerLabels = new Set(["Magnetic Mask", "Stabilization", "Optical Flow"]);
+  const insertions = new Map();
+  const skipped = [];
+
+  for (const item of recheck) {
+    if (!markerLabels.has(item.label)) continue;
+    const owner = conformRecheckOwnerForIndex(owners, item.index);
+    if (!owner) {
+      skipped.push(item);
+      continue;
+    }
+    const markerValue = `TURNOVER RECHECK: ${item.label}`;
+    const existing = topLevelConformMarkerInfo(xml, owner);
+    if (existing.values.has(markerValue)) continue;
+    const bucket = insertions.get(owner) || [];
+    for (const marker of bucket) {
+      const attrs = parseAttrs(marker);
+      if (attrs.start) existing.starts.add(attrs.start);
+      if (attrs.value) existing.values.add(attrs.value);
+    }
+    if (existing.values.has(markerValue)) continue;
+    const ownerLabel = `${owner.tag} ${owner.attrs.name || owner.attrs.ref || "unnamed"}`;
+    const note = `${ownerLabel}${item.owner !== ownerLabel ? ` | source: ${item.owner}` : ""}${item.detail ? ` | ${item.detail}` : ""}`;
+    const start = freeConformRecheckMarkerStart(owner, frameDuration, existing.starts);
+    bucket.push(`<marker start="${escapeAttr(start)}" duration="${escapeAttr(frameDurationText)}" value="${escapeAttr(markerValue)}" completed="1" note="${escapeAttr(note)}"/>`);
+    insertions.set(owner, bucket);
+  }
+
+  const replacements = [];
+  for (const [owner, markers] of insertions) {
+    const payload = `\n${markers.join("\n")}\n`;
+    if (owner.selfClosing) {
+      const open = xml.slice(owner.openStart, owner.openEnd).replace(/\/\s*>$/, ">");
+      replacements.push({
+        start: owner.openStart,
+        end: owner.openEnd,
+        value: `${open}${payload}\n</${owner.tag}>`,
+      });
+    } else {
+      const insertionOffset = conformMarkerInsertionOffset(xml, owner);
+      replacements.push({ start: insertionOffset, end: insertionOffset, value: payload });
+    }
+  }
+  replacements.sort((a, b) => b.start - a.start);
+  let patched = xml;
+  for (const replacement of replacements) {
+    patched = patched.slice(0, replacement.start) + replacement.value + patched.slice(replacement.end);
+  }
+  return {
+    xml: patched,
+    recheck,
+    created: [...insertions.values()].reduce((total, markers) => total + markers.length, 0),
+    skipped,
+  };
+}
+
 function insertStoryItemIntoClipXML(clipXML, storyXML) {
   const close = clipXML.match(/<\/(clip|asset-clip)>\s*$/);
   if (!close) return clipXML;
@@ -3431,8 +3721,11 @@ function insertStoryItemIntoClipXML(clipXML, storyXML) {
     "chapter-marker",
     "rating",
     "keyword",
-    "audio-role-source",
+    "analysis-marker",
+    "hidden-clip-marker",
+    "audio-channel-source",
     "filter-video",
+    "filter-video-mask",
     "filter-audio",
     "metadata",
   ]);
@@ -3447,6 +3740,122 @@ function insertStoryItemIntoClipXML(clipXML, storyXML) {
     return `${clipXML.slice(0, closeIndex)}\n${storyXML}\n${clipXML.slice(closeIndex)}`;
   }
   return `${clipXML.slice(0, insertIndex)}${storyXML}\n${clipXML.slice(insertIndex)}`;
+}
+
+function elementRanges(xml, targetTags) {
+  const ranges = [];
+  const stack = [];
+  const tagRegex = /<(\/?)([\w:_-]+)(.*?)(\/?)>/gs;
+  let match;
+  while ((match = tagRegex.exec(xml))) {
+    const [, closing, tag, attrSource, selfClosing] = match;
+    if (closing !== "/") {
+      const node = {
+        tag,
+        attrs: parseAttrs(attrSource),
+        openStart: match.index,
+        openEnd: tagRegex.lastIndex,
+        closeStart: selfClosing === "/" ? tagRegex.lastIndex : null,
+        closeEnd: selfClosing === "/" ? tagRegex.lastIndex : null,
+        selfClosing: selfClosing === "/",
+      };
+      if (!node.selfClosing) stack.push(node);
+      else if (targetTags.has(tag)) ranges.push(node);
+    } else {
+      const node = stack.pop();
+      if (!node || node.tag !== tag) continue;
+      node.closeStart = match.index;
+      node.closeEnd = tagRegex.lastIndex;
+      if (targetTags.has(tag)) ranges.push(node);
+    }
+  }
+  return ranges;
+}
+
+function normalizeClipChildOrderForDTD(xml) {
+  const targetTags = new Set(["clip", "asset-clip"]);
+  const noteTags = new Set(["note"]);
+  const retimeTags = new Set(["conform-rate", "timeMap"]);
+  const adjustmentTags = new Set([
+    "object-tracker",
+    "adjust-crop",
+    "adjust-corners",
+    "adjust-conform",
+    "adjust-transform",
+    "adjust-blend",
+    "adjust-stabilization",
+    "adjust-rollingShutter",
+    "adjust-360-transform",
+    "adjust-reorient",
+    "adjust-orientation",
+    "adjust-cinematic",
+    "adjust-colorConform",
+    "adjust-stereo-3D",
+    "adjust-volume",
+    "adjust-panner",
+  ]);
+  const storyTags = new Set([
+    "spine",
+    "audio",
+    "video",
+    "clip",
+    "title",
+    "mc-clip",
+    "ref-clip",
+    "sync-clip",
+    "asset-clip",
+    "audition",
+    "gap",
+    "live-drawing",
+    "caption",
+  ]);
+  const markerTags = new Set([
+    "marker",
+    "chapter-marker",
+    "rating",
+    "keyword",
+    "analysis-marker",
+    "hidden-clip-marker",
+  ]);
+  const audioChannelTags = new Set(["audio-channel-source"]);
+  const filterVideoTags = new Set(["filter-video", "filter-video-mask"]);
+  const filterAudioTags = new Set(["filter-audio"]);
+  const metadataTags = new Set(["metadata"]);
+
+  const rank = (tag) => {
+    if (noteTags.has(tag)) return 0;
+    if (retimeTags.has(tag)) return 1;
+    if (adjustmentTags.has(tag)) return 2;
+    if (storyTags.has(tag)) return 3;
+    if (markerTags.has(tag)) return 4;
+    if (audioChannelTags.has(tag)) return 5;
+    if (filterVideoTags.has(tag)) return 6;
+    if (filterAudioTags.has(tag)) return 7;
+    if (metadataTags.has(tag)) return 8;
+    return 3;
+  };
+
+  let patched = xml;
+  let changed = 0;
+  const ranges = elementRanges(xml, targetTags)
+    .filter((item) => !item.selfClosing && item.closeStart != null && item.closeEnd != null)
+    .sort((a, b) => b.openStart - a.openStart);
+
+  for (const range of ranges) {
+    const body = patched.slice(range.openEnd, range.closeStart);
+    const elements = collectTopLevelElements(body);
+    if (elements.length < 2) continue;
+    const ordered = elements
+      .map((item, index) => ({ item, index, rank: rank(item.tag) }))
+      .sort((a, b) => a.rank - b.rank || a.index - b.index);
+    if (ordered.every((entry, index) => entry.index === index)) continue;
+
+    const rebuiltBody = `\n${ordered.map((entry) => entry.item.xml.trim()).join("\n")}\n`;
+    patched = `${patched.slice(0, range.openEnd)}${rebuiltBody}${patched.slice(range.closeStart)}`;
+    changed += 1;
+  }
+
+  return { xml: patched, count: changed };
 }
 
 function relocateClipLocalSiblingTitles(xml, reportLines) {
@@ -3665,6 +4074,27 @@ async function main() {
     patched = beforeTitleRelocation;
     report.push("clip-local sibling title relocation skipped: generated XML was not well-formed");
   }
+
+  const recheckResult = insertConformRecheckMarkers(
+    patched,
+    formatFrameDurations.timeline || "1/24s"
+  );
+  patched = recheckResult.xml;
+  assertWellFormed(patched, "conform recheck markers");
+  report.push(`conform recheck items: ${recheckResult.recheck.length}`);
+  report.push(`conform recheck markers created: ${recheckResult.created}`);
+  report.push(`conform recheck markers skipped: ${recheckResult.skipped.length}`);
+  for (const item of recheckResult.recheck) {
+    report.push(`- recheck ${item.label}: ${item.owner}${item.detail ? ` (${item.detail})` : ""}`);
+  }
+  for (const item of recheckResult.skipped) {
+    report.push(`- recheck marker skipped ${item.label}: ${item.owner}`);
+  }
+
+  const normalizedClipChildOrder = normalizeClipChildOrderForDTD(patched);
+  patched = normalizedClipChildOrder.xml;
+  assertWellFormed(patched, "clip child order normalization");
+  report.push(`clip child order normalized for DTD: ${normalizedClipChildOrder.count}`);
 
   const finalAudioInventory = summarizeAudioStructures(patched);
   appendAudioInventory(report, "final output audio inventory", finalAudioInventory);

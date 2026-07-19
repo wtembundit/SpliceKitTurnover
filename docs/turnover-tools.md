@@ -33,6 +33,32 @@ Important notes:
 - Not every FCPXML shape is guaranteed yet, especially multicam and retime patterns we have not tested.
 - If a clip disappears or titles/markers drift after import, keep both the original XML and generated XML as a reproducible test case.
 
+## 🔥 Data Burn-In
+
+Creates review burn-ins from the current Final Cut Pro timeline through Turnover standalone.
+
+For the full user guide, implementation map, and release checklist, see [Data Burn-In](./data-burn-in.md).
+
+SpliceKit menu items:
+
+- **Burn-In Transparent...** exports a transparent ProRes 4444 overlay using a preset saved in Turnover standalone.
+- **Burn-In Customize...** opens the current Final Cut Pro timeline in the Turnover Data Burn-In Customizer for preview, style changes, metadata selection, range export, and preset editing.
+
+Best for:
+
+- Quick transparent burn-in overlays that can be placed above a timeline in Final Cut Pro.
+- Review exports where the burn-in layout should match a saved team preset.
+- Handing off to Turnover standalone when the user needs to customize fields, labels, metadata, style, or export range.
+
+Important notes:
+
+- SpliceKit does not run the Burn-In parser directly. It exports a temporary FCPXML snapshot and calls Turnover's headless Burn-In command.
+- The release plugin bundles the matching `Turnover.app` for Burn-In headless export.
+- Burn-In presets come from Turnover standalone, so users should create or edit presets there first.
+- Transparent export is ProRes 4444 `.mov` with alpha and no audio.
+- Burned-in H.264/HEVC reference export is available in Turnover standalone.
+- If SpliceKit appears to use an older parser or preset list, confirm which `Turnover.app` it resolved before debugging the FCPXML.
+
 ## 📝 VFX Auto Naming
 
 Automatically numbers `VFX NAMING` titles.

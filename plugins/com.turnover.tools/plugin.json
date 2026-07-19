@@ -1,7 +1,7 @@
 {
   "id": "com.turnover.tools",
   "name": "Turnover",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "description": "VFX and turnover workflow tools for Final Cut Pro.",
   "author": "Turnover",
   "apiVersion": 1,
@@ -37,6 +37,27 @@
       "name": "conform_prep_verify",
       "description": "Verify a Conform Prep result by choosing original/imported XML and optional CSV files",
       "params": {},
+      "readOnly": false
+    },
+    {
+      "name": "data_burn_in",
+      "description": "Export a transparent ProRes 4444 Data Burn-In overlay using a Turnover preset",
+      "params": {},
+      "readOnly": false
+    },
+    {
+      "name": "data_burn_in_open",
+      "description": "Export the current FCP project XML and open it in Turnover for Data Burn-In customization",
+      "params": {},
+      "readOnly": false
+    },
+    {
+      "name": "marker_export",
+      "description": "Export timeline markers to EDL, CSV, or TXT",
+      "params": {
+        "filter": { "type": "string", "required": false, "description": "all, standard, todo, chapter, or recheck" },
+        "format": { "type": "string", "required": false, "description": "edl, csv, or txt" }
+      },
       "readOnly": false
     },
     {

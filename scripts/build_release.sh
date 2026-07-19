@@ -34,6 +34,7 @@ mkdir -p "$PLUGIN_STAGE" "$APP_STAGE" "$RELEASE_DIR"
 
 cp "$ROOT/Install Turnover.command" "$PLUGIN_STAGE/"
 rsync -a --exclude '.DS_Store' --exclude 'data' "$PLUGIN_DIR" "$PLUGIN_STAGE/plugins/"
+cp -R "$ROOT/standalone/TurnoverApp/build/Turnover.app" "$PLUGIN_STAGE/plugins/com.turnover.tools/Turnover.app"
 rsync -a --exclude '.DS_Store' --exclude 'scripts/node_modules' "$ROOT/lua" "$PLUGIN_STAGE/"
 rsync -a --exclude '.DS_Store' "$ROOT/motion-templates" "$PLUGIN_STAGE/"
 rsync -a --exclude '.DS_Store' --exclude 'data-burn-in-design.md' "$ROOT/docs" "$PLUGIN_STAGE/"
@@ -44,8 +45,8 @@ cp "$ROOT/standalone/TurnoverApp/README.md" "$APP_STAGE/README.md"
 cp "$ROOT/docs/release-notes-v$VERSION.md" "$APP_STAGE/Release Notes.md"
 
 rm -f "$RELEASE_DIR/Turnover-SpliceKit-v$VERSION.zip" "$RELEASE_DIR/Turnover-Standalone-v$VERSION.zip"
-ditto -c -k --sequesterRsrc --keepParent "$PLUGIN_STAGE" "$RELEASE_DIR/Turnover-SpliceKit-v$VERSION.zip"
-ditto -c -k --sequesterRsrc --keepParent "$APP_STAGE" "$RELEASE_DIR/Turnover-Standalone-v$VERSION.zip"
+ditto -c -k --norsrc --keepParent "$PLUGIN_STAGE" "$RELEASE_DIR/Turnover-SpliceKit-v$VERSION.zip"
+ditto -c -k --norsrc --keepParent "$APP_STAGE" "$RELEASE_DIR/Turnover-Standalone-v$VERSION.zip"
 
 shasum -a 256 "$RELEASE_DIR/Turnover-SpliceKit-v$VERSION.zip" "$RELEASE_DIR/Turnover-Standalone-v$VERSION.zip" > "$RELEASE_DIR/SHA256SUMS-v$VERSION.txt"
 ls -lh "$RELEASE_DIR/Turnover-"*"v$VERSION.zip" "$RELEASE_DIR/SHA256SUMS-v$VERSION.txt"

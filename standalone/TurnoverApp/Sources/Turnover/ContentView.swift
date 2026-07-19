@@ -3,8 +3,8 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var model: TurnoverModel
+    @Environment(\.openWindow) private var openWindow
     @State private var dropTargeted = false
-    @State private var showBurnInCustomizer = false
 
     var body: some View {
         ZStack {
@@ -30,8 +30,13 @@ struct ContentView: View {
             .padding(32)
         }
         .preferredColorScheme(.dark)
-        .sheet(isPresented: $showBurnInCustomizer) {
-            BurnInCustomizerView(model: model)
+        .onChange(of: model.state) { _, newState in
+            if model.selectedTool == .dataBurnIn,
+               newState == .succeeded,
+               model.shouldOpenBurnInCustomizerAfterBuild {
+                model.shouldOpenBurnInCustomizerAfterBuild = false
+                openWindow(id: "burn-in-customizer")
+            }
         }
     }
 
@@ -115,7 +120,7 @@ struct ContentView: View {
                     Label(
                         model.state == .running
                             ? "Processing..."
-                            : (model.selectedTool == .dataBurnIn ? "Build Burn-In Manifest" : "Run \(model.selectedTool.rawValue)"),
+                            : (model.selectedTool == .dataBurnIn ? "Build Burn-In Cache" : "Run \(model.selectedTool.rawValue)"),
                         systemImage: "wand.and.stars"
                     )
                 }
@@ -123,8 +128,19 @@ struct ContentView: View {
                 .tint(.orange)
                 .disabled(!model.canRun)
 
+                if model.burnInExportProgress != nil {
+                    Button {
+                        model.cancelBurnInExport()
+                    } label: {
+                        Label("Stop Current", systemImage: "xmark")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Cancel the current Data Burn-In export and continue with the next queued job.")
+                }
+
                 if model.selectedTool != .vfxPullEDL
                     && model.selectedTool != .vfxShotList
+                    && model.selectedTool != .exportMarkers
                     && model.selectedTool != .dataBurnIn {
                     Toggle("Open result in Final Cut Pro", isOn: $model.openInFinalCut)
                         .toggleStyle(.checkbox)
@@ -144,13 +160,20 @@ struct ContentView: View {
 
     private var toolSelection: some View {
         VStack(spacing: 7) {
-            HStack {
+            HStack(spacing: 10) {
                 Spacer(minLength: 0)
-                Button(TurnoverModel.Tool.conformPrep.selectorName) {
-                    model.selectedTool = .conformPrep
+                Picker("Core Tools", selection: $model.selectedTool) {
+                    ForEach([
+                        TurnoverModel.Tool.conformPrep,
+                        TurnoverModel.Tool.dataBurnIn,
+                        .exportMarkers,
+                    ]) { tool in
+                        Text(tool.selectorName).tag(tool)
+                    }
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(model.selectedTool == .conformPrep ? .accentColor : .gray)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize(horizontal: true, vertical: false)
                 Spacer(minLength: 0)
             }
             HStack(spacing: 10) {
@@ -181,6 +204,8 @@ struct ContentView: View {
         switch model.selectedTool {
         case .conformPrep:
             "Flattens sync clips and retains supported timeline attributes. Use a duplicate timeline, then detach and delete audio first for clean conform checks."
+        case .exportMarkers:
+            "Exports existing Final Cut Pro markers only. EDL is the Resolve-friendly default; CSV and TXT are available for review."
         case .vfxNaming:
             "Requires the VFX Naming Motion title template. Auto Number works on VFX naming titles already placed in the timeline."
         case .autoMarker:
@@ -192,7 +217,7 @@ struct ContentView: View {
         case .vfxTimeline:
             "Requires numbered VFX Naming titles and delivery filenames containing the matching VFX shot numbers."
         case .dataBurnIn:
-            "Builds a frame-resolved preview manifest. Transparent ProRes rendering is not enabled in this prototype."
+            "Builds a frame-resolved preview cache. Export can render a burned-in reference or a transparent ProRes 4444 overlay."
         }
     }
 
@@ -234,6 +259,24 @@ struct ContentView: View {
     private var contextualSettings: some View {
         HStack(spacing: 12) {
             switch model.selectedTool {
+            case .exportMarkers:
+                HStack(spacing: 10) {
+                    Picker("Marker Type", selection: $model.markerExportKind) {
+                        ForEach(TurnoverModel.MarkerExportKind.allCases) { kind in
+                            Text(kind.rawValue).tag(kind)
+                        }
+                    }
+                    .frame(width: 220)
+                    Picker("Format", selection: $model.markerExportFormat) {
+                        ForEach(TurnoverModel.MarkerExportFormat.allCases) { format in
+                            Text(format.rawValue).tag(format)
+                        }
+                    }
+                    .frame(width: 190)
+                }
+                Text("Exports markers only. EDL is optimized for DaVinci Resolve.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             case .conformPrep:
                 Text("Flatten sync clips to source media. Recommended preflight: duplicate the timeline, detach audio, and delete audio before running.")
                     .font(.caption)
@@ -300,26 +343,49 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             case .dataBurnIn:
-                HStack(spacing: 10) {
-                    Picker("Preset", selection: $model.burnInPreset) {
-                        ForEach(TurnoverModel.BurnInPreset.allCases) { preset in
-                            Text(preset.rawValue).tag(preset)
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 10) {
+                        Picker("Preset", selection: $model.selectedBurnInPresetID) {
+                            ForEach(model.burnInPresets) { preset in
+                                Text(preset.name).tag(preset.id)
+                            }
                         }
-                    }
-                    .frame(width: 225)
-                    .onChange(of: model.burnInPreset) { _, _ in model.applyBurnInPreset() }
+                        .frame(width: 135)
+                        .onChange(of: model.selectedBurnInPresetID) { _, _ in model.applySelectedBurnInPreset() }
 
-                    Button("Choose Video...") { model.chooseBurnInVideo() }
-                    Text(model.burnInVideoURL?.lastPathComponent ?? "Transparent ProRes 4444 overlay")
-                        .font(.caption)
-                        .foregroundStyle(model.burnInVideoURL == nil ? .secondary : .primary)
-                        .lineLimit(1)
-                        .frame(maxWidth: 245, alignment: .leading)
-                    if model.burnInVideoURL != nil {
-                        Button("Clear") { model.clearBurnInVideo() }
-                            .controlSize(.small)
+                        Button("Choose Video...") { model.chooseBurnInVideo() }
+                            .fixedSize()
+                        Text(model.burnInExportMode == .transparentOverlay ? "Transparent ProRes 4444 overlay" : (model.burnInVideoURL?.lastPathComponent ?? "Choose a video for burned-in export"))
+                            .font(.caption)
+                            .foregroundStyle(model.burnInExportMode == .transparentOverlay || model.burnInVideoURL == nil ? .secondary : .primary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if model.burnInVideoURL != nil {
+                            Button("Clear") { model.clearBurnInVideo() }
+                                .controlSize(.small)
+                        }
+                        Button("Export Video...") { model.prepareBurnInVideoExport() }
+                            .fixedSize()
+                            .disabled(model.burnInDurationSeconds <= 0)
+                            .help(model.burnInExportEstimateText)
+                        if model.burnInExportProgress != nil {
+                            Button {
+                                model.cancelBurnInExport()
+                            } label: {
+                                Image(systemName: "xmark")
+                            }
+                            .buttonStyle(.bordered)
+                            .help("Cancel the current export")
+                        }
+                        Button("Customize...") { openWindow(id: "burn-in-customizer") }
+                            .fixedSize()
                     }
-                    Button("Customize...") { showBurnInCustomizer = true }
+                    Text(model.burnInExportEstimateText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
             }
             Spacer(minLength: 0)
@@ -333,14 +399,73 @@ struct ContentView: View {
                 Text(statusTitle)
                     .font(.system(.headline, design: .rounded))
                 Spacer()
-                Text(model.nodeStatus)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
+                if model.burnInExportProgress == nil {
+                    Text(model.nodeStatus)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
                 Text("Cache: \(model.cacheSizeText)")
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
                 Button("Clear Cache") { model.clearCache() }
                     .controlSize(.small)
+            }
+            if let progress = model.burnInExportProgress {
+                HStack(spacing: 10) {
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .frame(maxWidth: 360)
+                    Text("\(Int(progress * 100))%")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 42, alignment: .trailing)
+                    if model.burnInExportQueueCount > 0 {
+                        Text("\(model.burnInExportQueueCount) queued")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    Button {
+                        model.cancelBurnInExport()
+                    } label: {
+                        Label("Stop Current", systemImage: "xmark")
+                    }
+                    .controlSize(.small)
+                    .help("Cancel the current export and continue with the next queued job.")
+                    if model.burnInExportQueueCount > 0 {
+                        Button {
+                            model.cancelAllBurnInExports()
+                        } label: {
+                            Label("Stop All", systemImage: "xmark.circle")
+                        }
+                        .controlSize(.small)
+                        .help("Cancel the current export and clear all queued exports.")
+                    }
+                }
+                Text([model.burnInExportFilename, model.burnInExportStatus]
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " - "))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if !model.burnInQueuedExports.isEmpty {
+                    HStack(spacing: 8) {
+                        Text("Queued \(model.burnInExportQueueCount):")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .layoutPriority(1)
+                        Text(model.burnInQueueSummary)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button("Clear Queue") {
+                            model.clearQueuedBurnInExports()
+                        }
+                        .controlSize(.small)
+                        .help("Remove queued exports. The current export keeps running.")
+                    }
+                }
             }
             Text(model.log)
                 .font(.system(.caption, design: .monospaced))
@@ -367,7 +492,8 @@ struct ContentView: View {
     }
 
     private var statusTitle: String {
-        switch model.state {
+        if model.burnInExportProgress != nil { return "Exporting Video" }
+        return switch model.state {
         case .idle: "Waiting for FCPXML"
         case .ready: "Ready"
         case .running: "Processing"
